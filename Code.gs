@@ -205,7 +205,6 @@ function processCustomThread_(thread, label, data, myEmails, cutoff) {
     let toAddr = '', ccAddr = '', recipientName = '';
     if (step.to) {
       toAddr = step.to;
-      ccAddr = step.cc || '';
       const first = parseAddressList_(toAddr)[0];
       if (first) recipientName = first.name || '';
     } else if (lastInbound) {
@@ -246,10 +245,15 @@ function processCustomThread_(thread, label, data, myEmails, cutoff) {
     }
 
     const html = text.replace(/\n/g, '<br>');
+    // Additive: per-step / campaign-level cc and bcc layer on top of any
+    // thread-derived defaults without replacing them.
+    ccAddr = mergeRecipients_(ccAddr, step.cc || '');
+    const bccAddr = (step.bcc || '').trim();
     const replyAnchor = messages[messages.length - 1] || null;
     sendThreadReply_(thread, {
       to: toAddr,
       cc: ccAddr,
+      bcc: bccAddr,
       body: text,
       html: html,
       replyTo: replyAnchor
@@ -277,8 +281,8 @@ function processCustomThread_(thread, label, data, myEmails, cutoff) {
 // Passing threadId to Gmail.Users.Messages.send threads the new message correctly
 // and lets us fully control To: / Cc:.
 //
-// options: { to: string, cc?: string, body: string, html?: string, subject?: string,
-//            replyTo?: GmailMessage }
+// options: { to: string, cc?: string, bcc?: string, body: string, html?: string,
+//            subject?: string, replyTo?: GmailMessage }
 // replyTo is the prior message we're answering — its Message-ID becomes our
 // In-Reply-To and is appended to References, so external clients (Outlook, Apple Mail,
 // non-Gmail recipients) render the message as a proper threaded reply.
@@ -286,7 +290,8 @@ function sendThreadReply_(thread, options) {
   const to = options.to;
   if (!to) throw new Error('sendThreadReply_: missing to');
   const cc = options.cc || '';
-  Logger.log('sendThreadReply_ → to="' + to + '" cc="' + cc + '" thread=' + thread.getId());
+  const bcc = options.bcc || '';
+  Logger.log('sendThreadReply_ → to="' + to + '" cc="' + cc + '" bcc="' + bcc + '" thread=' + thread.getId());
   const baseSubject = thread.getFirstMessageSubject() || '';
   const subject = options.subject ||
     (/^Re:\s*/i.test(baseSubject) ? baseSubject : 'Re: ' + baseSubject);
@@ -302,6 +307,7 @@ function sendThreadReply_(thread, options) {
   if (fromHeader) raw += 'From: ' + fromHeader + '\r\n';
   raw += 'To: ' + to + '\r\n';
   if (cc) raw += 'Cc: ' + cc + '\r\n';
+  if (bcc) raw += 'Bcc: ' + bcc + '\r\n';
   raw += 'Subject: ' + encodeMimeSubject_(subject) + '\r\n';
   if (threadHeaders.inReplyTo) {
     raw += 'In-Reply-To: ' + threadHeaders.inReplyTo + '\r\n';
@@ -421,6 +427,30 @@ function readReplyHeaders_(replyTo) {
 function isFromMe_(message, myEmails) {
   const from = (message.getFrom() || '').toLowerCase();
   return myEmails.some(function (e) { return from.indexOf(e) !== -1; });
+}
+
+
+// Merge two comma-separated recipient lists, deduping by lowercased email.
+// Either side may be blank/missing. Used to layer per-step or campaign-level
+// CC/BCC on top of thread-derived defaults without double-listing anyone.
+function mergeRecipients_(a, b) {
+  const seen = {};
+  const out = [];
+  function add(list) {
+    if (!list) return;
+    String(list).split(',').forEach(function (s) {
+      const trimmed = s.trim();
+      if (!trimmed) return;
+      const email = parseAddress_(trimmed).email.toLowerCase();
+      if (!email) return;
+      if (seen[email]) return;
+      seen[email] = true;
+      out.push(trimmed);
+    });
+  }
+  add(a);
+  add(b);
+  return out.join(', ');
 }
 
 
@@ -784,8 +814,16 @@ function buildCard_(threadId) {
     campaign.addWidget(
       CardService.newTextInput()
         .setFieldName('cc')
-        .setTitle('Cc (optional)')
+        .setTitle('Cc (applied to every step)')
+        .setHint('Comma-separated. Added to the default recipients, not replacing them.')
         .setValue(draft.cc || '')
+    );
+    campaign.addWidget(
+      CardService.newTextInput()
+        .setFieldName('bcc')
+        .setTitle('Bcc (applied to every step)')
+        .setHint('Comma-separated. Hidden from other recipients.')
+        .setValue(draft.bcc || '')
     );
 
     draft.steps.forEach(function (step, idx) {
@@ -818,6 +856,20 @@ function buildCard_(threadId) {
           .setMultiline(true)
           .setValue(step.message || '')
           .setHint('Blank = use default template. Placeholders: {firstName}, {senderFirstName}')
+      );
+      campaign.addWidget(
+        CardService.newTextInput()
+          .setFieldName('cc_' + idx)
+          .setTitle('Cc — only this step (optional)')
+          .setHint('Comma-separated. Added on top of campaign Cc and default recipients.')
+          .setValue(step.cc || '')
+      );
+      campaign.addWidget(
+        CardService.newTextInput()
+          .setFieldName('bcc_' + idx)
+          .setTitle('Bcc — only this step (optional)')
+          .setHint('Comma-separated. Added on top of campaign Bcc.')
+          .setValue(step.bcc || '')
       );
       if (draft.steps.length > 1) {
         campaign.addWidget(
@@ -971,6 +1023,13 @@ function buildCard_(threadId) {
       CardService.newTextInput()
         .setFieldName('oneOffCc')
         .setTitle('Cc (optional)')
+        .setHint('Comma-separated. Added to default recipients, not replacing them.')
+    );
+    oneOff.addWidget(
+      CardService.newTextInput()
+        .setFieldName('oneOffBcc')
+        .setTitle('Bcc (optional)')
+        .setHint('Comma-separated. Hidden from other recipients.')
     );
     oneOff.addWidget(
       CardService.newTextInput()
@@ -1065,7 +1124,10 @@ const TEMPLATE_PREFIX = 'template_';
 const MAX_CAMPAIGN_STEPS = 10;
 
 function defaultDraft_() {
-  return { steps: [{ amount: 3, unit: 'days', message: '' }], recipients: '', cc: '' };
+  return {
+    steps: [{ amount: 3, unit: 'days', message: '', cc: '', bcc: '' }],
+    recipients: '', cc: '', bcc: ''
+  };
 }
 
 function getDraft_(threadId) {
@@ -1076,6 +1138,11 @@ function getDraft_(threadId) {
     if (!d || !Array.isArray(d.steps) || d.steps.length === 0) return defaultDraft_();
     if (typeof d.recipients !== 'string') d.recipients = '';
     if (typeof d.cc !== 'string') d.cc = '';
+    if (typeof d.bcc !== 'string') d.bcc = '';
+    d.steps.forEach(function (s) {
+      if (typeof s.cc !== 'string') s.cc = '';
+      if (typeof s.bcc !== 'string') s.bcc = '';
+    });
     return d;
   } catch (e) { return defaultDraft_(); }
 }
@@ -1088,9 +1155,9 @@ function clearDraft_(threadId) {
   PropertiesService.getUserProperties().deleteProperty(DRAFT_PREFIX + threadId);
 }
 
-// Reads form inputs (amount_i, unit_i, message_i) into a draft structure of the
-// same length as the existing draft. Used by every action handler so user edits
-// aren't lost when the card re-renders.
+// Reads form inputs (amount_i, unit_i, message_i, cc_i, bcc_i) into a draft
+// structure of the same length as the existing draft. Used by every action
+// handler so user edits aren't lost when the card re-renders.
 function readFormDraft_(e, currentDraft) {
   const f = e.formInput || {};
   const count = currentDraft.steps.length;
@@ -1100,13 +1167,16 @@ function readFormDraft_(e, currentDraft) {
     steps.push({
       amount: isNaN(amount) ? 0 : amount,
       unit: (f['unit_' + i] || 'days').toLowerCase(),
-      message: (f['message_' + i] || '').trim()
+      message: (f['message_' + i] || '').trim(),
+      cc: (f['cc_' + i] || '').trim(),
+      bcc: (f['bcc_' + i] || '').trim()
     });
   }
   return {
     steps: steps,
     recipients: (f.recipients || '').trim(),
-    cc: (f.cc || '').trim()
+    cc: (f.cc || '').trim(),
+    bcc: (f.bcc || '').trim()
   };
 }
 
@@ -1199,7 +1269,8 @@ function actionSaveCampaign(e) {
   const tz = getPreferredTz_();
   const now = Date.now();
   const recipientsField = (draft.recipients || '').trim();
-  const ccField = (draft.cc || '').trim();
+  const campaignCc = (draft.cc || '').trim();
+  const campaignBcc = (draft.bcc || '').trim();
   let cumulative = 0;
   const newSteps = draft.steps.map(function (s) {
     let mult;
@@ -1207,6 +1278,8 @@ function actionSaveCampaign(e) {
     else if (s.unit === 'hours') mult = 60 * 60 * 1000;
     else mult = 24 * 60 * 60 * 1000;
     cumulative += s.amount * mult;
+    const stepCc = mergeRecipients_(campaignCc, s.cc || '');
+    const stepBcc = mergeRecipients_(campaignBcc, s.bcc || '');
     const obj = {
       sendAt: now + cumulative,
       message: s.message,
@@ -1214,7 +1287,8 @@ function actionSaveCampaign(e) {
       createdAt: now
     };
     if (recipientsField) obj.to = recipientsField;
-    if (ccField) obj.cc = ccField;
+    if (stepCc) obj.cc = stepCc;
+    if (stepBcc) obj.bcc = stepBcc;
     return obj;
   });
 
@@ -1269,6 +1343,7 @@ function actionScheduleOneOff(e) {
   const message = (f.oneOffMessage || '').trim();
   const oneOffTo = (f.oneOffRecipients || '').trim();
   const oneOffCc = (f.oneOffCc || '').trim();
+  const oneOffBcc = (f.oneOffBcc || '').trim();
 
   const props = PropertiesService.getUserProperties();
   const key = 'custom_' + threadId;
@@ -1286,6 +1361,7 @@ function actionScheduleOneOff(e) {
   const stepObj = { sendAt: sendAt, message: message, tz: tz, createdAt: Date.now() };
   if (oneOffTo) stepObj.to = oneOffTo;
   if (oneOffCc) stepObj.cc = oneOffCc;
+  if (oneOffBcc) stepObj.bcc = oneOffBcc;
   data.steps.push(stepObj);
   data.steps.sort(function (a, b) { return a.sendAt - b.sendAt; });
   props.setProperty(key, JSON.stringify(data));
