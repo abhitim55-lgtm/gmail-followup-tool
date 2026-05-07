@@ -12,36 +12,22 @@ const CONFIG = {
   // Your name for the {senderFirstName} placeholder in templates.
   senderFirstName: 'Abhishek',
 
+  // Display name on the From: header of outgoing follow-ups (e.g. "Abhishek Sehgal").
+  // Leave blank ('') to auto-detect from your Gmail "Send mail as" settings.
+  senderName: 'Abhishek Sehgal',
+
   // All Gmail addresses YOU send from (lowercase).
   // Add aliases here if you send from multiple addresses.
   senderEmails: [
     'abhishek.sehgal@procmart.com'
   ],
 
-  // Gmail label prefix. Threads labeled FU/<key> get processed by stage <key>.
+  // Gmail label prefix. The only label we actively process is FU/Custom.
   labelPrefix: 'FU',
 
-  // Follow-up stages. Each stage is independent.
-  //   daysAfter:  send if N days have passed since YOUR last message
-  //   template:   message body. Placeholders: {firstName}, {senderFirstName}
-  //   nextLabel:  what to relabel as after sending. null = stop here.
-  stages: {
-    '3d': {
-      daysAfter: 3,
-      template: 'Hey {firstName} — just bumping this back up. Any thoughts when you get a sec?\n\n{senderFirstName}',
-      nextLabel: 'FU/7d'
-    },
-    '7d': {
-      daysAfter: 7,
-      template: 'Hey {firstName} — circling back on this. Worth a quick chat?\n\n{senderFirstName}',
-      nextLabel: 'FU/14d'
-    },
-    '14d': {
-      daysAfter: 14,
-      template: '{firstName} — last nudge from me. Happy to pick this back up if now isn\'t the right moment.\n\n{senderFirstName}',
-      nextLabel: null
-    }
-  },
+  // Default message body when a custom step's message is left blank.
+  // Placeholders: {firstName}, {senderFirstName}
+  defaultTemplate: 'Hey {firstName} — just bumping this back up. Any thoughts when you get a sec?\n\n{senderFirstName}',
 
   // Only send during 9am–6pm in the script timezone (set in appsscript.json).
   businessHoursOnly: false,
@@ -63,7 +49,7 @@ const CONFIG = {
 
 
 function processFollowUps() {
-  Logger.log('processFollowUps build=advsvc-2 (cold recipients from first outbound + self-strip)');
+  Logger.log('processFollowUps build=custom-only');
   if (CONFIG.businessHoursOnly && !isBusinessHours_()) {
     Logger.log('Outside business hours — skipping run.');
     return;
@@ -72,32 +58,6 @@ function processFollowUps() {
   const myEmails = CONFIG.senderEmails.map(function (e) { return e.toLowerCase(); });
   const cutoff = new Date(Date.now() - CONFIG.lookbackDays * 86400000);
   let sent = 0;
-
-  for (const stageKey of Object.keys(CONFIG.stages)) {
-    if (sent >= CONFIG.maxPerRun) {
-      Logger.log('Hit maxPerRun (' + CONFIG.maxPerRun + ') — stopping.');
-      break;
-    }
-    const stage = CONFIG.stages[stageKey];
-    const labelName = CONFIG.labelPrefix + '/' + stageKey;
-    const label = GmailApp.getUserLabelByName(labelName);
-    if (!label) {
-      Logger.log('Label "' + labelName + '" not found — run setup() first.');
-      continue;
-    }
-
-    const threads = label.getThreads();
-    Logger.log('Stage ' + stageKey + ': ' + threads.length + ' thread(s).');
-
-    for (const thread of threads) {
-      if (sent >= CONFIG.maxPerRun) break;
-      try {
-        if (processThread_(thread, label, stage, myEmails, cutoff)) sent++;
-      } catch (e) {
-        Logger.log('Error on thread ' + thread.getId() + ': ' + e);
-      }
-    }
-  }
 
   // Custom multi-step schedules (set via the sidebar UI).
   const customLabel = GmailApp.getUserLabelByName(CONFIG.labelPrefix + '/Custom');
@@ -181,77 +141,78 @@ function processCustomThread_(thread, label, data, myEmails, cutoff) {
   const key = 'custom_' + thread.getId();
   const messages = thread.getMessages();
 
+  // Locate my last outbound and the most recent inbound — used as fallbacks
+  // when a step does not specify explicit recipients.
   let myLastIdx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (isFromMe_(messages[i], myEmails)) { myLastIdx = i; break; }
   }
-  if (myLastIdx === -1) {
-    Logger.log('Custom: thread "' + thread.getFirstMessageSubject() +
-      '" has NO outbound message from senderEmails ' + JSON.stringify(myEmails) +
-      '. Senders found: ' + messages.map(function (m) { return m.getFrom(); }).join(' | ') +
-      '. Clearing label and stored schedule.');
-    thread.removeLabel(label);
-    props.deleteProperty(key);
-    return false;
-  }
-  for (let i = myLastIdx + 1; i < messages.length; i++) {
-    if (!isFromMe_(messages[i], myEmails)) {
-      Logger.log('Prospect replied — cancelling all custom follow-ups.');
-      thread.removeLabel(label);
-      props.deleteProperty(key);
-      return false;
-    }
-  }
-  const myLast = messages[myLastIdx];
   let lastInbound = null;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (!isFromMe_(messages[i], myEmails)) { lastInbound = messages[i]; break; }
   }
 
-  // Determine who to follow up with. Inbound reply = use that sender;
-  // cold thread = use the original To: of my last sent message.
-  let recipientEmail = '';
-  let recipientName = '';
-  if (lastInbound) {
-    const p = parseAddress_(lastInbound.getFrom());
-    recipientEmail = p.email;
-    recipientName = p.name;
+  const nextStep = data.steps[0];
+  const explicitMode = !!(nextStep && nextStep.to);
+
+  if (explicitMode) {
+    // In explicit mode the user picked specific recipients, so the thread does
+    // not need to contain any of my outbound mail. Auto-cancel only if one of
+    // the listed recipients sent something AFTER the step was scheduled.
+    const targets = parseAddressList_(nextStep.to)
+      .map(function (a) { return a.email.toLowerCase(); })
+      .filter(function (e) { return e.length > 0; });
+    const sinceMs = nextStep.createdAt || 0;
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      if (m.getDate().getTime() <= sinceMs) continue;
+      const fromEmail = parseAddress_(m.getFrom()).email.toLowerCase();
+      if (fromEmail && targets.indexOf(fromEmail) !== -1) {
+        Logger.log('Custom (explicit): "' + fromEmail + '" replied since step was scheduled — cancelling.');
+        thread.removeLabel(label);
+        props.deleteProperty(key);
+        return false;
+      }
+    }
   } else {
-    const toAddr = (myLast.getTo() || '').split(',')[0].trim();
-    if (toAddr) {
-      const p = parseAddress_(toAddr);
-      recipientEmail = p.email;
-      recipientName = p.name;
+    if (myLastIdx === -1) {
+      Logger.log('Custom: thread "' + thread.getFirstMessageSubject() +
+        '" has NO outbound message from senderEmails ' + JSON.stringify(myEmails) +
+        ' and no explicit recipients on the next step. ' +
+        'Senders found: ' + messages.map(function (m) { return m.getFrom(); }).join(' | ') +
+        '. Clearing label and stored schedule.');
+      thread.removeLabel(label);
+      props.deleteProperty(key);
+      return false;
+    }
+    for (let i = myLastIdx + 1; i < messages.length; i++) {
+      if (!isFromMe_(messages[i], myEmails)) {
+        Logger.log('Prospect replied — cancelling all custom follow-ups.');
+        thread.removeLabel(label);
+        props.deleteProperty(key);
+        return false;
+      }
     }
   }
-  if (!recipientEmail) {
-    Logger.log('No recipient could be determined — clearing label.');
-    thread.removeLabel(label);
-    props.deleteProperty(key);
-    return false;
-  }
 
-  const firstName = firstNameOf_(recipientName) || 'there';
-  const firstStageKey = Object.keys(CONFIG.stages)[0];
+  const myLast = myLastIdx !== -1 ? messages[myLastIdx] : null;
 
   let sentAny = false;
   while (data.steps.length > 0 && data.steps[0].sendAt <= Date.now()) {
     const step = data.steps[0];
-    const tmpl = step.message || CONFIG.stages[firstStageKey].template;
-    const text = tmpl
-      .replace(/\{firstName\}/g, firstName)
-      .replace(/\{senderFirstName\}/g, CONFIG.senderFirstName);
 
-    if (CONFIG.dryRun) {
-      Logger.log('[DRY RUN custom] Would send to ' + recipientEmail + ':\n' + text);
-      break;
-    }
-
-    const html = text.replace(/\n/g, '<br>');
-    if (lastInbound) {
-      const inboundFrom = parseAddress_(lastInbound.getFrom());
-      sendThreadReply_(thread, { to: inboundFrom.email, body: text, html: html });
-    } else {
+    // Per-step recipient resolution. Priority: explicit > inbound sender > cold-derive.
+    let toAddr = '', ccAddr = '', recipientName = '';
+    if (step.to) {
+      toAddr = step.to;
+      ccAddr = step.cc || '';
+      const first = parseAddressList_(toAddr)[0];
+      if (first) recipientName = first.name || '';
+    } else if (lastInbound) {
+      const p = parseAddress_(lastInbound.getFrom());
+      toAddr = p.email;
+      recipientName = p.name;
+    } else if (myLast) {
       const recipients = deriveColdRecipients_(messages, myEmails);
       if (!recipients.to) {
         Logger.log('Custom: could not derive non-self recipients for "' +
@@ -260,14 +221,42 @@ function processCustomThread_(thread, label, data, myEmails, cutoff) {
         props.deleteProperty(key);
         return sentAny;
       }
-      sendThreadReply_(thread, {
-        to: recipients.to,
-        cc: recipients.cc,
-        body: text,
-        html: html
-      });
+      toAddr = recipients.to;
+      ccAddr = recipients.cc;
+      const first = parseAddressList_(toAddr)[0];
+      if (first) recipientName = first.name || '';
+    } else {
+      Logger.log('Custom: no recipients resolvable for step on "' +
+        thread.getFirstMessageSubject() + '" — clearing.');
+      thread.removeLabel(label);
+      props.deleteProperty(key);
+      return sentAny;
     }
-    Logger.log('✓ Custom follow-up sent to ' + recipientEmail + ' (' + (data.steps.length - 1) + ' remaining).');
+
+    const firstName = firstNameOf_(recipientName) || 'there';
+    const tmpl = step.message || CONFIG.defaultTemplate;
+    const text = tmpl
+      .replace(/\{firstName\}/g, firstName)
+      .replace(/\{senderFirstName\}/g, CONFIG.senderFirstName);
+
+    if (CONFIG.dryRun) {
+      Logger.log('[DRY RUN custom] Would send to ' + toAddr +
+        (ccAddr ? ' (cc ' + ccAddr + ')' : '') + ':\n' + text);
+      break;
+    }
+
+    const html = text.replace(/\n/g, '<br>');
+    const replyAnchor = messages[messages.length - 1] || null;
+    sendThreadReply_(thread, {
+      to: toAddr,
+      cc: ccAddr,
+      body: text,
+      html: html,
+      replyTo: replyAnchor
+    });
+    Logger.log('✓ Custom follow-up sent to ' + toAddr +
+      (ccAddr ? ' (cc ' + ccAddr + ')' : '') +
+      ' (' + (data.steps.length - 1) + ' remaining).');
     data.steps.shift();
     sentAny = true;
   }
@@ -282,114 +271,17 @@ function processCustomThread_(thread, label, data, myEmails, cutoff) {
 }
 
 
-function processThread_(thread, currentLabel, stage, myEmails, cutoff) {
-  const messages = thread.getMessages();
-  if (messages.length === 0) return false;
-
-  // Find my last sent message.
-  let myLastIdx = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (isFromMe_(messages[i], myEmails)) { myLastIdx = i; break; }
-  }
-  if (myLastIdx === -1) {
-    Logger.log('No outbound message in thread — clearing label.');
-    thread.removeLabel(currentLabel);
-    return false;
-  }
-  const myLast = messages[myLastIdx];
-
-  // If a later message exists, prospect replied — stop following up.
-  for (let i = myLastIdx + 1; i < messages.length; i++) {
-    if (!isFromMe_(messages[i], myEmails)) {
-      Logger.log('Prospect replied on "' + thread.getFirstMessageSubject() + '" — clearing label.');
-      thread.removeLabel(currentLabel);
-      return false;
-    }
-  }
-
-  if (myLast.getDate() < cutoff) {
-    Logger.log('Older than lookback window — clearing label.');
-    thread.removeLabel(currentLabel);
-    return false;
-  }
-
-  const daysSince = (Date.now() - myLast.getDate().getTime()) / 86400000;
-  if (daysSince < stage.daysAfter) return false;
-
-  // Find last inbound message (used for the reply target if it exists).
-  let lastInbound = null;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (!isFromMe_(messages[i], myEmails)) { lastInbound = messages[i]; break; }
-  }
-
-  // Determine recipient: inbound sender if any, otherwise the original To: of my last sent.
-  let recipientEmail = '';
-  let recipientName = '';
-  if (lastInbound) {
-    const p = parseAddress_(lastInbound.getFrom());
-    recipientEmail = p.email;
-    recipientName = p.name;
-  } else {
-    const toAddr = (myLast.getTo() || '').split(',')[0].trim();
-    if (toAddr) {
-      const p = parseAddress_(toAddr);
-      recipientEmail = p.email;
-      recipientName = p.name;
-    }
-  }
-  if (!recipientEmail) {
-    Logger.log('No recipient could be determined — clearing label.');
-    thread.removeLabel(currentLabel);
-    return false;
-  }
-
-  const firstName = firstNameOf_(recipientName) || 'there';
-  const text = stage.template
-    .replace(/\{firstName\}/g, firstName)
-    .replace(/\{senderFirstName\}/g, CONFIG.senderFirstName);
-  const html = text.replace(/\n/g, '<br>');
-
-  if (CONFIG.dryRun) {
-    Logger.log('[DRY RUN] Would send to ' + recipientEmail + ':\n' + text);
-    return false;
-  }
-
-  if (lastInbound) {
-    const inboundFrom = parseAddress_(lastInbound.getFrom());
-    sendThreadReply_(thread, { to: inboundFrom.email, body: text, html: html });
-  } else {
-    const recipients = deriveColdRecipients_(messages, myEmails);
-    if (!recipients.to) {
-      Logger.log('Stage: could not derive non-self recipients for "' +
-        thread.getFirstMessageSubject() + '" — clearing.');
-      thread.removeLabel(currentLabel);
-      return false;
-    }
-    sendThreadReply_(thread, {
-      to: recipients.to,
-      cc: recipients.cc,
-      body: text,
-      html: html
-    });
-  }
-
-  thread.removeLabel(currentLabel);
-  if (stage.nextLabel) {
-    thread.addLabel(getOrCreateLabel_(stage.nextLabel));
-  }
-
-  Logger.log('✓ Sent follow-up to ' + recipientEmail + ' (stage ' + stage.daysAfter + 'd).');
-  return true;
-}
-
-
 // Send a reply on an existing Gmail thread using the Gmail Advanced Service.
 // We bypass GmailMessage.reply() because it auto-CC's the original sender when
 // replying to one of your own sent messages, producing "to me, Nabilla" output.
 // Passing threadId to Gmail.Users.Messages.send threads the new message correctly
 // and lets us fully control To: / Cc:.
 //
-// options: { to: string, cc?: string, body: string, html?: string, subject?: string }
+// options: { to: string, cc?: string, body: string, html?: string, subject?: string,
+//            replyTo?: GmailMessage }
+// replyTo is the prior message we're answering — its Message-ID becomes our
+// In-Reply-To and is appended to References, so external clients (Outlook, Apple Mail,
+// non-Gmail recipients) render the message as a proper threaded reply.
 function sendThreadReply_(thread, options) {
   const to = options.to;
   if (!to) throw new Error('sendThreadReply_: missing to');
@@ -401,24 +293,33 @@ function sendThreadReply_(thread, options) {
   const body = options.body || '';
   const html = options.html || body.replace(/\n/g, '<br>');
 
+  const threadHeaders = readReplyHeaders_(options.replyTo);
+
+  const fromHeader = resolveFromHeader_();
+
   const boundary = '----=_omc_' + Math.random().toString(36).slice(2);
   let raw = '';
+  if (fromHeader) raw += 'From: ' + fromHeader + '\r\n';
   raw += 'To: ' + to + '\r\n';
   if (cc) raw += 'Cc: ' + cc + '\r\n';
   raw += 'Subject: ' + encodeMimeSubject_(subject) + '\r\n';
+  if (threadHeaders.inReplyTo) {
+    raw += 'In-Reply-To: ' + threadHeaders.inReplyTo + '\r\n';
+    raw += 'References: ' + threadHeaders.references + '\r\n';
+  }
   raw += 'MIME-Version: 1.0\r\n';
   raw += 'Content-Type: multipart/alternative; boundary="' + boundary + '"\r\n';
   raw += '\r\n';
   raw += '--' + boundary + '\r\n';
   raw += 'Content-Type: text/plain; charset=UTF-8\r\n';
-  raw += 'Content-Transfer-Encoding: 7bit\r\n';
+  raw += 'Content-Transfer-Encoding: base64\r\n';
   raw += '\r\n';
-  raw += body + '\r\n';
+  raw += encodeBase64Body_(body) + '\r\n';
   raw += '--' + boundary + '\r\n';
   raw += 'Content-Type: text/html; charset=UTF-8\r\n';
-  raw += 'Content-Transfer-Encoding: 7bit\r\n';
+  raw += 'Content-Transfer-Encoding: base64\r\n';
   raw += '\r\n';
-  raw += html + '\r\n';
+  raw += encodeBase64Body_(html) + '\r\n';
   raw += '--' + boundary + '--';
 
   const encoded = Utilities.base64EncodeWebSafe(raw);
@@ -433,6 +334,87 @@ function encodeMimeSubject_(s) {
   // ASCII subjects pass through unchanged for readability.
   if (/^[\x00-\x7F]*$/.test(s)) return s;
   return '=?UTF-8?B?' + Utilities.base64Encode(s, Utilities.Charset.UTF_8) + '?=';
+}
+
+// Base64-encode a string as UTF-8 with RFC 2045 line wrapping at 76 chars.
+// Required for body parts so multi-byte characters (smart quotes, em-dashes, etc.)
+// survive transport instead of being mangled to "?" by 7bit-only relays.
+function encodeBase64Body_(s) {
+  const b64 = Utilities.base64Encode(s || '', Utilities.Charset.UTF_8);
+  return b64.replace(/.{76}/g, '$&\r\n');
+}
+
+// Build the From: header value: '"Display Name" <email@host>' or just the email
+// if no display name is available. Display name comes from CONFIG.senderName when
+// set, otherwise from the user's Gmail "Send mail as" settings (matches what shows
+// up when they reply manually). Cached per script execution.
+let _cachedFromHeader_ = null;
+function resolveFromHeader_() {
+  if (_cachedFromHeader_ !== null) return _cachedFromHeader_;
+
+  let email = '';
+  try { email = Session.getActiveUser().getEmail() || ''; } catch (e) {}
+  if (!email && CONFIG.senderEmails && CONFIG.senderEmails.length) {
+    email = CONFIG.senderEmails[0];
+  }
+
+  let name = (CONFIG.senderName || '').trim();
+  if (!name) {
+    try {
+      const sendAs = Gmail.Users.Settings.SendAs.list('me');
+      const list = (sendAs && sendAs.sendAs) || [];
+      let primary = null;
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].isPrimary) { primary = list[i]; break; }
+      }
+      if (!primary && list.length) primary = list[0];
+      if (primary && primary.displayName) name = String(primary.displayName).trim();
+    } catch (e) {
+      Logger.log('resolveFromHeader_: SendAs lookup failed: ' + e);
+    }
+  }
+
+  if (!email) { _cachedFromHeader_ = ''; return _cachedFromHeader_; }
+
+  if (name) {
+    // ASCII names: RFC 5322 quoted-string. Non-ASCII: RFC 2047 encoded-word.
+    const phrase = /^[\x00-\x7F]*$/.test(name)
+      ? '"' + name.replace(/(["\\])/g, '\\$1') + '"'
+      : '=?UTF-8?B?' + Utilities.base64Encode(name, Utilities.Charset.UTF_8) + '?=';
+    _cachedFromHeader_ = phrase + ' <' + email + '>';
+  } else {
+    _cachedFromHeader_ = email;
+  }
+  return _cachedFromHeader_;
+}
+
+// Read RFC 5322 threading headers from the message we're replying to.
+// Returns { inReplyTo, references } where references is the prior chain plus
+// the anchor's Message-ID, per RFC 5322 §3.6.4. Returns empty strings if the
+// anchor is missing or the lookup fails — caller falls back to no headers
+// (original behavior) rather than failing the send.
+function readReplyHeaders_(replyTo) {
+  if (!replyTo) return { inReplyTo: '', references: '' };
+  try {
+    const meta = Gmail.Users.Messages.get('me', replyTo.getId(), {
+      format: 'metadata',
+      metadataHeaders: ['Message-ID', 'References']
+    });
+    const headers = (meta && meta.payload && meta.payload.headers) || [];
+    let messageId = '';
+    let priorRefs = '';
+    for (let i = 0; i < headers.length; i++) {
+      const name = (headers[i].name || '').toLowerCase();
+      if (name === 'message-id') messageId = headers[i].value || '';
+      else if (name === 'references') priorRefs = headers[i].value || '';
+    }
+    if (!messageId) return { inReplyTo: '', references: '' };
+    const references = priorRefs ? (priorRefs + ' ' + messageId) : messageId;
+    return { inReplyTo: messageId, references: references };
+  } catch (e) {
+    Logger.log('readReplyHeaders_ failed: ' + e + ' — sending without threading headers.');
+    return { inReplyTo: '', references: '' };
+  }
 }
 
 
@@ -483,6 +465,17 @@ function parseAddress_(s) {
 }
 
 
+// Split a comma-separated header value (To: / Cc:) into [{name, email}, ...].
+function parseAddressList_(s) {
+  if (!s) return [];
+  return String(s)
+    .split(',')
+    .map(function (c) { return c.trim(); })
+    .filter(function (c) { return c.length > 0; })
+    .map(parseAddress_);
+}
+
+
 function firstNameOf_(name) {
   if (!name) return '';
   const cleaned = name.replace(/[",]/g, ' ').trim();
@@ -506,13 +499,8 @@ function isBusinessHours_() {
 }
 
 
-// Run this ONCE after pasting the code. Creates labels + the hourly trigger.
+// Run this ONCE after pasting the code. Creates the FU/Custom label + the trigger.
 function setup() {
-  for (const k of Object.keys(CONFIG.stages)) {
-    getOrCreateLabel_(CONFIG.labelPrefix + '/' + k);
-    const next = CONFIG.stages[k].nextLabel;
-    if (next) getOrCreateLabel_(next);
-  }
   getOrCreateLabel_(CONFIG.labelPrefix + '/Custom');
 
   for (const t of ScriptApp.getProjectTriggers()) {
@@ -520,17 +508,169 @@ function setup() {
   }
   ScriptApp.newTrigger('processFollowUps').timeBased().everyMinutes(1).create();
 
-  Logger.log('Setup done. Trigger runs every 1 min. Use the Gmail sidebar (puzzle icon) to schedule, or apply FU/* labels manually.');
+  Logger.log('Setup done. Trigger runs every 1 min. Use the Gmail sidebar (puzzle icon) to schedule.');
 }
 
 
 // ───────── Gmail Add-on UI ───────────────────────────────────────
 
-function buildHomepage() { return buildCard_(null); }
+function buildHomepage() { return buildDashboardCard_(); }
 
 function buildAddOn(e) {
   const threadId = e && e.gmail && e.gmail.threadId;
+  if (!threadId) return buildDashboardCard_();
   return buildCard_(threadId);
+}
+
+
+// ───────── Campaigns dashboard ─────────────────────────────────────
+//
+// Note: Gmail Add-ons cannot add an item to Gmail's left navigation rail
+// (the "Inbox / Sent / Drafts" list — that's controlled by Gmail itself).
+// What Mailmeteor shows there is actually their own web app surface, not
+// an add-on. The closest equivalent we can offer is this dashboard card,
+// reachable via the sidebar puzzle-piece icon when no thread is open, plus
+// the FU/Custom Gmail label which already acts as a "saved search" view of
+// every thread with a scheduled follow-up.
+function buildDashboardCard_() {
+  const card = CardService.newCardBuilder()
+    .setHeader(
+      CardService.newCardHeader()
+        .setTitle('Campaigns')
+        .setSubtitle('All threads with scheduled follow-ups')
+        .setImageUrl('https://www.gstatic.com/images/icons/material/system/2x/schedule_send_googblue_48dp.png')
+        .setImageStyle(CardService.ImageStyle.CIRCLE)
+    );
+
+  const props = PropertiesService.getUserProperties();
+  const allKeys = props.getKeys().filter(function (k) { return k.indexOf('custom_') === 0; });
+
+  const items = [];
+  allKeys.forEach(function (key) {
+    const threadId = key.substring('custom_'.length);
+    const raw = props.getProperty(key);
+    if (!raw) return;
+    let data;
+    try { data = JSON.parse(raw); } catch (e) { return; }
+    if (data.sendAt && !data.steps) {
+      data = { steps: [{ sendAt: data.sendAt, message: data.message || '' }] };
+    }
+    if (!data.steps || data.steps.length === 0) return;
+    let thread;
+    try { thread = GmailApp.getThreadById(threadId); } catch (e) { return; }
+    if (!thread) return;
+    data.steps.sort(function (a, b) { return a.sendAt - b.sendAt; });
+    const next = data.steps[0];
+    items.push({
+      threadId: threadId,
+      subject: thread.getFirstMessageSubject() || '(no subject)',
+      stepCount: data.steps.length,
+      nextSendAt: next.sendAt,
+      tz: next.tz || getPreferredTz_(),
+      to: next.to || '',
+      permalink: thread.getPermalink()
+    });
+  });
+  items.sort(function (a, b) { return a.nextSendAt - b.nextSendAt; });
+
+  // Summary section.
+  const summary = CardService.newCardSection();
+  summary.addWidget(CardService.newTextParagraph().setText(
+    items.length === 0
+      ? '<font color="#5f6368">No active campaigns. Open a thread and use the sidebar to schedule one.</font>'
+      : '<b>' + items.length + '</b> active campaign' + (items.length === 1 ? '' : 's') +
+        ' • <b>' + items.reduce(function (n, it) { return n + it.stepCount; }, 0) +
+        '</b> step' + (items.reduce(function (n, it) { return n + it.stepCount; }, 0) === 1 ? '' : 's') + ' queued'
+  ));
+  summary.addWidget(
+    CardService.newTextButton()
+      .setText('Refresh')
+      .setOnClickAction(CardService.newAction().setFunctionName('actionRefreshDashboard'))
+  );
+  card.addSection(summary);
+
+  // One row per campaign.
+  if (items.length > 0) {
+    const list = CardService.newCardSection().setHeader('Scheduled');
+    items.forEach(function (it, idx) {
+      const due = it.nextSendAt - Date.now();
+      const status = due > 0 ? 'in ' + humanDelta_(due) : Math.abs(Math.round(due / 60000)) + 'm overdue';
+      const recipientHint = it.to
+        ? ' → ' + it.to.substring(0, 50)
+        : '';
+      const dt = CardService.newDecoratedText()
+        .setTopLabel(it.stepCount + ' step' + (it.stepCount === 1 ? '' : 's') +
+          ' • next ' + status)
+        .setText(escapeHtml_(it.subject))
+        .setBottomLabel(escapeHtml_(formatLocal_(it.nextSendAt, it.tz) + recipientHint))
+        .setWrapText(true)
+        .setStartIcon(CardService.newIconImage().setIcon(CardService.Icon.CLOCK))
+        .setOnClickAction(
+          CardService.newAction()
+            .setFunctionName('actionOpenThreadCard')
+            .setParameters({ threadId: it.threadId })
+        );
+      list.addWidget(dt);
+
+      const rowButtons = CardService.newButtonSet();
+      rowButtons.addButton(
+        CardService.newTextButton()
+          .setText('Open in Gmail')
+          .setOpenLink(CardService.newOpenLink().setUrl(it.permalink))
+      );
+      rowButtons.addButton(
+        CardService.newTextButton()
+          .setText('Cancel')
+          .setOnClickAction(
+            CardService.newAction()
+              .setFunctionName('actionDeleteCampaign')
+              .setParameters({ threadId: it.threadId })
+          )
+      );
+      list.addWidget(rowButtons);
+      if (idx < items.length - 1) list.addWidget(CardService.newDivider());
+    });
+    card.addSection(list);
+  }
+
+  return card.build();
+}
+
+function actionRefreshDashboard() {
+  return CardService.newActionResponseBuilder()
+    .setNavigation(CardService.newNavigation().updateCard(buildDashboardCard_()))
+    .build();
+}
+
+function actionOpenThreadCard(e) {
+  const threadId = e.parameters.threadId;
+  if (!threadId) return notify_('No thread.');
+  return CardService.newActionResponseBuilder()
+    .setNavigation(CardService.newNavigation().pushCard(buildCard_(threadId)))
+    .build();
+}
+
+function actionDeleteCampaign(e) {
+  const threadId = e.parameters.threadId;
+  if (!threadId) return notify_('No thread.');
+  PropertiesService.getUserProperties().deleteProperty('custom_' + threadId);
+  try {
+    const thread = GmailApp.getThreadById(threadId);
+    if (thread) clearFollowUpLabels_(thread);
+  } catch (err) {}
+  return CardService.newActionResponseBuilder()
+    .setNotification(CardService.newNotification().setText('Campaign cancelled.'))
+    .setNavigation(CardService.newNavigation().updateCard(buildDashboardCard_()))
+    .build();
+}
+
+function humanDelta_(ms) {
+  const min = Math.round(ms / 60000);
+  if (min < 60) return min + 'm';
+  const hr = Math.round(min / 60);
+  if (hr < 48) return hr + 'h';
+  const d = Math.round(hr / 24);
+  return d + 'd';
 }
 
 // Canonicalize a thread ID. e.gmail.threadId can differ in format from
@@ -598,9 +738,12 @@ function buildCard_(threadId) {
       queue.forEach(function (step, idx) {
         const when = formatLocal_(step.sendAt, step.tz);
         const preview = (step.message || '(uses default template)').substring(0, 140);
+        const toLabel = step.to
+          ? ' • → ' + step.to.substring(0, 60)
+          : '';
         qSection.addWidget(
           CardService.newDecoratedText()
-            .setTopLabel('Step ' + (idx + 1) + ' • ' + when)
+            .setTopLabel('Step ' + (idx + 1) + ' • ' + when + toLabel)
             .setText(escapeHtml_(preview))
             .setWrapText(true)
             .setStartIcon(
@@ -630,6 +773,20 @@ function buildCard_(threadId) {
       '<font color="#5f6368">Each step waits the chosen time after the previous step ' +
       'sends. Auto-cancels if the recipient replies at any point.</font>'
     ));
+
+    campaign.addWidget(
+      CardService.newTextInput()
+        .setFieldName('recipients')
+        .setTitle('Send to (optional)')
+        .setHint('Override recipients. Comma-separated emails or "Name <email>". Blank = auto-detect from the thread.')
+        .setValue(draft.recipients || '')
+    );
+    campaign.addWidget(
+      CardService.newTextInput()
+        .setFieldName('cc')
+        .setTitle('Cc (optional)')
+        .setValue(draft.cc || '')
+    );
 
     draft.steps.forEach(function (step, idx) {
       campaign.addWidget(CardService.newDivider());
@@ -806,6 +963,17 @@ function buildCard_(threadId) {
     oneOff.addWidget(buildTimezoneDropdown_());
     oneOff.addWidget(
       CardService.newTextInput()
+        .setFieldName('oneOffRecipients')
+        .setTitle('Send to (optional)')
+        .setHint('Override recipients. Blank = auto-detect from the thread.')
+    );
+    oneOff.addWidget(
+      CardService.newTextInput()
+        .setFieldName('oneOffCc')
+        .setTitle('Cc (optional)')
+    );
+    oneOff.addWidget(
+      CardService.newTextInput()
         .setFieldName('oneOffMessage')
         .setTitle('Message (optional)')
         .setMultiline(true)
@@ -866,26 +1034,6 @@ function buildCard_(threadId) {
     card.addSection(seqSection);
   }
 
-  // Preset cadences (legacy 3d/7d/14d label-based).
-  const presets = CardService.newCardSection()
-    .setHeader('Tag with preset label')
-    .setCollapsible(true)
-    .setNumUncollapsibleWidgets(0);
-  const presetButtons = CardService.newButtonSet();
-  for (const k of Object.keys(CONFIG.stages)) {
-    presetButtons.addButton(
-      CardService.newTextButton()
-        .setText('FU/' + k)
-        .setOnClickAction(
-          CardService.newAction()
-            .setFunctionName('actionTagPreset')
-            .setParameters({ threadId: threadId || '', stage: k })
-        )
-    );
-  }
-  presets.addWidget(presetButtons);
-  card.addSection(presets);
-
   // Cancel all on thread.
   if (threadId) {
     const cancelSection = CardService.newCardSection();
@@ -904,85 +1052,6 @@ function buildCard_(threadId) {
   return card.build();
 }
 
-function actionTagPreset(e) {
-  const threadId = e.parameters.threadId;
-  const stage = e.parameters.stage;
-  if (!threadId) return notify_('Open a thread first.');
-  const thread = GmailApp.getThreadById(threadId);
-  // Clear any existing FU/* labels first
-  clearFollowUpLabels_(thread);
-  thread.addLabel(getOrCreateLabel_(CONFIG.labelPrefix + '/' + stage));
-  return notify_('Tagged FU/' + stage + '.');
-}
-
-function actionScheduleCustom(e) {
-  const threadId = e.parameters.threadId;
-  if (!threadId) return notify_('Open a thread first.');
-  const f = e.formInput || {};
-
-  const tz = (f.tz || '').trim() || getPreferredTz_();
-  setPreferredTz_(tz);
-  const scheduleType = (f.scheduleType || 'relative').toLowerCase();
-
-  let sendAt;
-  if (scheduleType === 'absolute') {
-    const pickerMs = getDateTimeInput_(e, 'sendAt');
-    if (!pickerMs) return notify_('Pick a date and time.');
-    // Gmail add-on DateTimePicker stores the user's chosen wall-clock as UTC components,
-    // not as a true UTC moment. Extract those components in UTC, then reinterpret them
-    // in the chosen timezone.
-    const wall = Utilities.formatDate(new Date(pickerMs), 'UTC', 'yyyy-MM-dd HH:mm');
-    sendAt = Utilities.parseDate(wall, tz, 'yyyy-MM-dd HH:mm').getTime();
-    if (sendAt <= Date.now()) return notify_('Pick a future time.');
-  } else {
-    const amount = parseInt(f.amount || '0', 10) || 0;
-    const unit = (f.unit || 'days').toLowerCase();
-    if (amount <= 0) return notify_('Enter a number greater than 0.');
-
-    let multiplier;
-    if (unit === 'minutes') multiplier = 60 * 1000;
-    else if (unit === 'hours') multiplier = 60 * 60 * 1000;
-    else multiplier = 24 * 60 * 60 * 1000;
-
-    sendAt = Date.now() + amount * multiplier;
-  }
-
-  const message = (f.message || '').trim();
-
-  const props = PropertiesService.getUserProperties();
-  const key = 'custom_' + threadId;
-  let data = { steps: [] };
-  const raw = props.getProperty(key);
-  if (raw) {
-    try {
-      data = JSON.parse(raw);
-      if (data.sendAt && !data.steps) {
-        data = { steps: [{ sendAt: data.sendAt, message: data.message || '' }] };
-      }
-      if (!data.steps) data.steps = [];
-    } catch (err) {
-      data = { steps: [] };
-    }
-  }
-  data.steps.push({ sendAt: sendAt, message: message, tz: tz });
-  data.steps.sort(function (a, b) { return a.sendAt - b.sendAt; });
-  props.setProperty(key, JSON.stringify(data));
-
-  const thread = GmailApp.getThreadById(threadId);
-  // Strip preset FU/* labels (3d/7d/14d) so they don't fight the custom queue,
-  // but keep FU/Custom on the thread.
-  clearOtherFollowUpLabels_(thread, CONFIG.labelPrefix + '/Custom');
-  const customLabel = getOrCreateLabel_(CONFIG.labelPrefix + '/Custom');
-  if (!hasLabel_(thread, customLabel.getName())) thread.addLabel(customLabel);
-
-  return CardService.newActionResponseBuilder()
-    .setNotification(CardService.newNotification().setText(
-      'Added step ' + data.steps.length + ' — fires ' + formatLocal_(sendAt, tz)
-    ))
-    .setNavigation(CardService.newNavigation().updateCard(buildCard_(threadId)))
-    .build();
-}
-
 function formatLocal_(ms, tz) {
   const zone = tz || getPreferredTz_();
   return Utilities.formatDate(new Date(ms), zone, 'MMM d, h:mm a z');
@@ -996,7 +1065,7 @@ const TEMPLATE_PREFIX = 'template_';
 const MAX_CAMPAIGN_STEPS = 10;
 
 function defaultDraft_() {
-  return { steps: [{ amount: 3, unit: 'days', message: '' }] };
+  return { steps: [{ amount: 3, unit: 'days', message: '' }], recipients: '', cc: '' };
 }
 
 function getDraft_(threadId) {
@@ -1005,6 +1074,8 @@ function getDraft_(threadId) {
   try {
     const d = JSON.parse(raw);
     if (!d || !Array.isArray(d.steps) || d.steps.length === 0) return defaultDraft_();
+    if (typeof d.recipients !== 'string') d.recipients = '';
+    if (typeof d.cc !== 'string') d.cc = '';
     return d;
   } catch (e) { return defaultDraft_(); }
 }
@@ -1032,7 +1103,11 @@ function readFormDraft_(e, currentDraft) {
       message: (f['message_' + i] || '').trim()
     });
   }
-  return { steps: steps };
+  return {
+    steps: steps,
+    recipients: (f.recipients || '').trim(),
+    cc: (f.cc || '').trim()
+  };
 }
 
 function listTemplates_() {
@@ -1123,6 +1198,8 @@ function actionSaveCampaign(e) {
   // Compute cumulative offsets — each step waits after the previous step's send.
   const tz = getPreferredTz_();
   const now = Date.now();
+  const recipientsField = (draft.recipients || '').trim();
+  const ccField = (draft.cc || '').trim();
   let cumulative = 0;
   const newSteps = draft.steps.map(function (s) {
     let mult;
@@ -1130,7 +1207,15 @@ function actionSaveCampaign(e) {
     else if (s.unit === 'hours') mult = 60 * 60 * 1000;
     else mult = 24 * 60 * 60 * 1000;
     cumulative += s.amount * mult;
-    return { sendAt: now + cumulative, message: s.message, tz: tz };
+    const obj = {
+      sendAt: now + cumulative,
+      message: s.message,
+      tz: tz,
+      createdAt: now
+    };
+    if (recipientsField) obj.to = recipientsField;
+    if (ccField) obj.cc = ccField;
+    return obj;
   });
 
   // Append to existing scheduled queue (one-offs and prior campaigns coexist).
@@ -1182,6 +1267,8 @@ function actionScheduleOneOff(e) {
   if (sendAt <= Date.now()) return notify_('Pick a future time.');
 
   const message = (f.oneOffMessage || '').trim();
+  const oneOffTo = (f.oneOffRecipients || '').trim();
+  const oneOffCc = (f.oneOffCc || '').trim();
 
   const props = PropertiesService.getUserProperties();
   const key = 'custom_' + threadId;
@@ -1196,7 +1283,10 @@ function actionScheduleOneOff(e) {
       }
     } catch (err) {}
   }
-  data.steps.push({ sendAt: sendAt, message: message, tz: tz });
+  const stepObj = { sendAt: sendAt, message: message, tz: tz, createdAt: Date.now() };
+  if (oneOffTo) stepObj.to = oneOffTo;
+  if (oneOffCc) stepObj.cc = oneOffCc;
+  data.steps.push(stepObj);
   data.steps.sort(function (a, b) { return a.sendAt - b.sendAt; });
   props.setProperty(key, JSON.stringify(data));
 
@@ -1425,7 +1515,7 @@ function actionInsertSequence(e) {
     }
   }
 
-  // Add each step at now + N days. Empty message = use stage 1 template.
+  // Add each step at now + N days. Empty message = use CONFIG.defaultTemplate.
   dayOffsets.forEach(function (d) {
     data.steps.push({ sendAt: now + d * 86400000, message: '' });
   });
@@ -1524,19 +1614,6 @@ function notify_(text) {
   return CardService.newActionResponseBuilder()
     .setNotification(CardService.newNotification().setText(text))
     .build();
-}
-
-
-// Manually queue a thread by ID or Gmail URL. Useful for testing.
-//   manualSchedule('https://mail.google.com/mail/u/0/#inbox/THREAD_ID', '3d')
-function manualSchedule(threadIdOrUrl, stageKey) {
-  stageKey = stageKey || '3d';
-  const idMatch = String(threadIdOrUrl).match(/[a-zA-Z0-9]{16,}/);
-  const id = idMatch ? idMatch[0] : threadIdOrUrl;
-  const thread = GmailApp.getThreadById(id);
-  if (!thread) throw new Error('No thread for ID ' + id);
-  thread.addLabel(getOrCreateLabel_(CONFIG.labelPrefix + '/' + stageKey));
-  Logger.log('Labeled "' + thread.getFirstMessageSubject() + '" with FU/' + stageKey);
 }
 
 
