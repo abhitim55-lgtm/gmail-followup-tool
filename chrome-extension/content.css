@@ -1,0 +1,29 @@
+/* Left-menu row: built from Gmail's own classes so it follows the theme;
+   these rules only add what Gmail normally wires up through its own JS. */
+#fu-nav-row .TO { cursor: pointer; }
+#fu-nav-row .TO:hover { background: rgba(127, 127, 127, 0.16); }
+#fu-nav-row .TO.fu-active { background: #d3e3fd; font-weight: 700; }
+#fu-nav-row .TO.fu-active, #fu-nav-row .TO.fu-active a { color: #001d35; }
+#fu-nav-row .qj { display: flex; align-items: center; justify-content: center; background: none !important; }
+#fu-nav-row .qj svg { width: 20px; height: 20px; }
+#fu-nav-row a { color: inherit; text-decoration: none; }
+
+#fu-panel {
+  position: fixed; z-index: 990; display: none; flex-direction: column;
+  background: #fff; border-radius: 16px; overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,.2);
+}
+#fu-panel.fu-open { display: flex; }
+#fu-panel .fu-bar {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 16px;
+  background: #f6f8fc; border-bottom: 1px solid #e0e3e7;
+  font: 500 14px "Google Sans", Roboto, Arial, sans-serif; color: #1f1f1f;
+}
+#fu-panel .fu-bar .fu-title { flex: 1; }
+#fu-panel .fu-bar button {
+  border: 0; background: transparent; border-radius: 16px; padding: 6px 12px;
+  font: inherit; font-size: 13px; color: #0b57d0; cursor: pointer;
+}
+#fu-panel .fu-bar button:hover { background: rgba(11, 87, 208, .08); }
+#fu-panel .fu-bar .fu-close { color: #444746; font-size: 18px; line-height: 1; padding: 4px 10px; }
+#fu-panel iframe { flex: 1; width: 100%; border: 0; background: #fff; }

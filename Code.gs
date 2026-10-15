@@ -9,15 +9,24 @@
 // ───────── EDIT THIS SECTION ─────────────────────────────────────
 
 const CONFIG = {
-  // Your name for the {senderFirstName} placeholder in templates.
+  // ── Owner-account identity ──────────────────────────────────────
+  // These three settings apply ONLY to the account(s) listed in senderEmails
+  // below — the person who originally set the script up. Anyone else who
+  // installs the add-on (a teammate, an intern) gets their own identity
+  // auto-detected from their Gmail account and "Send mail as" settings, and
+  // can override the display name from the sidebar. The owner's name and
+  // address never leak into someone else's outgoing mail.
+
+  // Name for the {senderFirstName} placeholder in templates.
   senderFirstName: 'Abhishek',
 
-  // Display name on the From: header of outgoing follow-ups (e.g. "Abhishek Sehgal").
-  // Leave blank ('') to auto-detect from your Gmail "Send mail as" settings.
+  // Display name on the From: header of outgoing follow-ups.
+  // Leave blank ('') to auto-detect from Gmail "Send mail as" settings.
   senderName: 'Abhishek Sehgal',
 
-  // All Gmail addresses YOU send from (lowercase).
-  // Add aliases here if you send from multiple addresses.
+  // Extra Gmail addresses the OWNER sends from (lowercase), on top of the ones
+  // auto-detected from the running account and its "Send mail as" aliases.
+  // Also identifies which account counts as the owner. Usually leave as-is.
   senderEmails: [
     'abhishek.sehgal@procmart.com'
   ],
@@ -41,11 +50,152 @@ const CONFIG = {
   // Cap on follow-ups per run. Safety net.
   maxPerRun: 25,
 
+  // How often the scheduler wakes up to send due follow-ups, in minutes.
+  // Apps Script only accepts 1, 5, 10, 15 or 30.
+  // Keep this at 5 or higher. A 1-minute trigger fires ~1440 times a day, which
+  // exhausts the daily script-runtime quota on consumer Gmail accounts — Google
+  // then stops running the trigger and nothing sends, with no visible error.
+  triggerIntervalMinutes: 5,
+
+  // Deployment ID of the Follow-up Studio web app (Deploy → Manage
+  // deployments). The sidebar's "Open Studio" button links here.
+  studioDeploymentId: 'AKfycbxqfbAVuFNv968-Zb2eqDl664UlEDnEaWXbdvYicfV44s4jx4ytm0OkkV4v6SmNINduAA',
+
   // true = log only, don't actually send. Use for first-time testing.
   dryRun: false
 };
 
 // ───────── END EDIT SECTION ──────────────────────────────────────
+
+
+// ───────── Per-user identity ─────────────────────────────────────
+//
+// The add-on is one script project but many installs: the owner plus anyone
+// they share it with. Everything below resolves identity from the ACCOUNT
+// CURRENTLY RUNNING, never from hardcoded config, so a teammate's follow-ups
+// go out as them. CONFIG's sender* values are treated as owner-only defaults.
+
+const SENDER_NAME_KEY = 'senderDisplayName';
+const SENDER_FIRST_NAME_KEY = 'senderFirstName';
+
+// The address of the account executing right now. getEffectiveUser() is the
+// reliable one inside a time-based trigger; getActiveUser() covers the add-on
+// UI context. Cached per execution.
+let _cachedRunningEmail_ = null;
+function getRunningEmail_() {
+  if (_cachedRunningEmail_ !== null) return _cachedRunningEmail_;
+  let email = '';
+  try { email = Session.getEffectiveUser().getEmail() || ''; } catch (e) {}
+  if (!email) {
+    try { email = Session.getActiveUser().getEmail() || ''; } catch (e) {}
+  }
+  if (!email) {
+    // Last resort: the primary "Send mail as" entry. Still the running user's
+    // own address — we never fall back to a hardcoded one.
+    try {
+      const primary = getPrimarySendAs_();
+      if (primary && primary.sendAsEmail) email = String(primary.sendAsEmail);
+    } catch (e) {}
+  }
+  _cachedRunningEmail_ = email.toLowerCase();
+  return _cachedRunningEmail_;
+}
+
+// The primary entry from Gmail "Send mail as" — source of the account's real
+// display name. Cached per execution; null if the lookup fails.
+let _cachedSendAsList_ = null;
+function getSendAsList_() {
+  if (_cachedSendAsList_ !== null) return _cachedSendAsList_;
+  try {
+    const res = Gmail.Users.Settings.SendAs.list('me');
+    _cachedSendAsList_ = (res && res.sendAs) || [];
+  } catch (e) {
+    Logger.log('getSendAsList_: lookup failed (' + e + ').');
+    _cachedSendAsList_ = [];
+  }
+  return _cachedSendAsList_;
+}
+
+function getPrimarySendAs_() {
+  const list = getSendAsList_();
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].isPrimary) return list[i];
+  }
+  return list.length ? list[0] : null;
+}
+
+// True when the account running this execution is the one CONFIG was written
+// for. Only then do CONFIG.senderName / senderFirstName / senderEmails apply.
+function isOwnerAccount_() {
+  const me = getRunningEmail_();
+  if (!me) return false;
+  return (CONFIG.senderEmails || []).some(function (e) {
+    return String(e).toLowerCase() === me;
+  });
+}
+
+// Every address that counts as "me": the account running the script and all of
+// its Gmail "Send mail as" aliases, plus CONFIG.senderEmails when this IS the
+// owner's account. Auto-detection matters: if this list misses the real sending
+// address, threads look like they have no outbound from us and schedules get
+// cleared. Equally, it must NOT include someone else's address — a teammate
+// would then treat the owner's messages as their own and reply on the wrong
+// anchor. Cached per execution.
+let _cachedMyEmails_ = null;
+function getMyEmails_() {
+  if (_cachedMyEmails_) return _cachedMyEmails_;
+  const seen = {};
+  const me = getRunningEmail_();
+  if (me) seen[me] = true;
+  getSendAsList_().forEach(function (s) {
+    if (s.sendAsEmail) seen[String(s.sendAsEmail).toLowerCase()] = true;
+  });
+  if (isOwnerAccount_()) {
+    (CONFIG.senderEmails || []).forEach(function (e) {
+      if (e) seen[String(e).toLowerCase()] = true;
+    });
+  }
+  _cachedMyEmails_ = Object.keys(seen);
+  if (_cachedMyEmails_.length === 0) {
+    Logger.log('getMyEmails_: could not resolve any address for the running account.');
+  }
+  return _cachedMyEmails_;
+}
+
+// Display name for the From: header. Priority: this user's saved override >
+// their Gmail "Send mail as" display name > CONFIG.senderName (owner only).
+function getSenderDisplayName_() {
+  try {
+    const saved = PropertiesService.getUserProperties().getProperty(SENDER_NAME_KEY);
+    if (saved) return saved.trim();
+  } catch (e) {}
+  const primary = getPrimarySendAs_();
+  if (primary && primary.displayName) return String(primary.displayName).trim();
+  if (isOwnerAccount_()) return (CONFIG.senderName || '').trim();
+  return '';
+}
+
+// Value for the {senderFirstName} placeholder. Same priority chain, falling
+// back to the first word of the display name, then the local part of the email.
+function getSenderFirstName_() {
+  try {
+    const saved = PropertiesService.getUserProperties().getProperty(SENDER_FIRST_NAME_KEY);
+    if (saved) return saved.trim();
+  } catch (e) {}
+  if (isOwnerAccount_() && CONFIG.senderFirstName) return CONFIG.senderFirstName;
+  const first = firstNameOf_(getSenderDisplayName_());
+  if (first) return first;
+  const email = getRunningEmail_();
+  return email ? email.split('@')[0] : '';
+}
+
+function setSenderIdentity_(displayName, firstName) {
+  const props = PropertiesService.getUserProperties();
+  if (displayName) props.setProperty(SENDER_NAME_KEY, displayName);
+  else props.deleteProperty(SENDER_NAME_KEY);
+  if (firstName) props.setProperty(SENDER_FIRST_NAME_KEY, firstName);
+  else props.deleteProperty(SENDER_FIRST_NAME_KEY);
+}
 
 
 function processFollowUps() {
@@ -55,9 +205,10 @@ function processFollowUps() {
     return;
   }
 
-  const myEmails = CONFIG.senderEmails.map(function (e) { return e.toLowerCase(); });
+  const myEmails = getMyEmails_();
   const cutoff = new Date(Date.now() - CONFIG.lookbackDays * 86400000);
   let sent = 0;
+  const errors = [];
 
   // Custom multi-step schedules (set via the sidebar UI).
   const customLabel = GmailApp.getUserLabelByName(CONFIG.labelPrefix + '/Custom');
@@ -92,22 +243,28 @@ function processFollowUps() {
         if (firstStepIn > 0) continue;
         if (processCustomThread_(thread, customLabel, data, myEmails, cutoff)) sent++;
       } catch (e) {
+        // A failed send used to be logged and forgotten: the step stayed queued,
+        // the run looked clean, and the user saw a campaign that never fired.
+        // Keep the step, but surface the reason in the sidebar.
+        errors.push(thread.getFirstMessageSubject() + ': ' + e);
         Logger.log('Custom error on ' + thread.getId() + ': ' + e);
       }
     }
   }
 
-  Logger.log('Done. Sent ' + sent + ' follow-up(s).');
+  Logger.log('Done. Sent ' + sent + ' follow-up(s).' +
+    (errors.length ? ' ' + errors.length + ' error(s).' : ''));
 
-  try { recordRun_(Logger.getLog()); } catch (e) {}
+  try { recordRun_(Logger.getLog(), sent, errors); } catch (e) {}
 }
 
 
 // Persist the last N processFollowUps runs so we can read them back via clasp/editor.
 const RUN_LOG_KEY = 'recentRuns';
 const RUN_LOG_MAX = 20;
+const LAST_RUN_KEY = 'lastRunSummary';
 
-function recordRun_(text) {
+function recordRun_(text, sent, errors) {
   const props = PropertiesService.getUserProperties();
   let arr = [];
   const raw = props.getProperty(RUN_LOG_KEY);
@@ -115,6 +272,22 @@ function recordRun_(text) {
   arr.push({ at: Date.now(), text: String(text || '') });
   while (arr.length > RUN_LOG_MAX) arr.shift();
   props.setProperty(RUN_LOG_KEY, JSON.stringify(arr));
+
+  // Compact summary the sidebar can render without parsing the whole log.
+  props.setProperty(LAST_RUN_KEY, JSON.stringify({
+    at: Date.now(),
+    sent: sent || 0,
+    errors: (errors || []).slice(0, 3)
+  }));
+  recordHeartbeat_('run', { sent: sent || 0, errors: errors || [] });
+}
+
+function getLastRunSummary_() {
+  try {
+    const raw = PropertiesService.getUserProperties().getProperty(LAST_RUN_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) { return null; }
 }
 
 // Run from the editor (or via `clasp run lastRunReport`) to see recent trigger runs.
@@ -152,55 +325,54 @@ function processCustomThread_(thread, label, data, myEmails, cutoff) {
     if (!isFromMe_(messages[i], myEmails)) { lastInbound = messages[i]; break; }
   }
 
-  const nextStep = data.steps[0];
-  const explicitMode = !!(nextStep && nextStep.to);
+  const myLast = myLastIdx !== -1 ? messages[myLastIdx] : null;
 
-  if (explicitMode) {
-    // In explicit mode the user picked specific recipients, so the thread does
-    // not need to contain any of my outbound mail. Auto-cancel only if one of
-    // the listed recipients sent something AFTER the step was scheduled.
-    const targets = parseAddressList_(nextStep.to)
-      .map(function (a) { return a.email.toLowerCase(); })
-      .filter(function (e) { return e.length > 0; });
-    const sinceMs = nextStep.createdAt || 0;
-    for (let i = 0; i < messages.length; i++) {
-      const m = messages[i];
-      if (m.getDate().getTime() <= sinceMs) continue;
-      const fromEmail = parseAddress_(m.getFrom()).email.toLowerCase();
-      if (fromEmail && targets.indexOf(fromEmail) !== -1) {
-        Logger.log('Custom (explicit): "' + fromEmail + '" replied since step was scheduled — cancelling.');
-        thread.removeLabel(label);
-        props.deleteProperty(key);
-        return false;
-      }
-    }
-  } else {
-    if (myLastIdx === -1) {
+  let sentAny = false;
+  let idx = 0;
+  while (idx < data.steps.length && data.steps[idx].sendAt <= Date.now()) {
+    const step = data.steps[idx];
+    const explicitMode = !!step.to;
+
+    // Thread-mode steps need at least one outbound from us; otherwise nothing
+    // to reply to. Explicit mode is allowed even without prior outbound.
+    if (!explicitMode && myLastIdx === -1) {
       Logger.log('Custom: thread "' + thread.getFirstMessageSubject() +
         '" has NO outbound message from senderEmails ' + JSON.stringify(myEmails) +
-        ' and no explicit recipients on the next step. ' +
+        ' and no explicit recipients on the step. ' +
         'Senders found: ' + messages.map(function (m) { return m.getFrom(); }).join(' | ') +
         '. Clearing label and stored schedule.');
       thread.removeLabel(label);
       props.deleteProperty(key);
-      return false;
+      return sentAny;
     }
-    for (let i = myLastIdx + 1; i < messages.length; i++) {
-      if (!isFromMe_(messages[i], myEmails)) {
-        Logger.log('Prospect replied — cancelling all custom follow-ups.');
-        thread.removeLabel(label);
-        props.deleteProperty(key);
-        return false;
+
+    // Per-step condition decides whether we send, skip past, or cancel the whole campaign.
+    const hasReply = stepHasReply_(messages, step, myEmails, myLastIdx);
+    const condition = step.condition || 'no_reply';
+    const decision = evaluateStepCondition_(condition, hasReply);
+    if (decision === 'cancel') {
+      Logger.log('Custom: condition "' + condition + '" hit — cancelling campaign on "' +
+        thread.getFirstMessageSubject() + '".');
+      thread.removeLabel(label);
+      props.deleteProperty(key);
+      return sentAny;
+    }
+    if (decision === 'defer') {
+      // "If replied" step that's due but has no reply yet: hold it and keep
+      // checking on later runs, without blocking steps behind it. Give up after
+      // a grace window so a never-answered thread doesn't stay armed forever.
+      if (Date.now() - step.sendAt > REPLIED_WAIT_MAX_MS) {
+        Logger.log('Custom: condition "' + condition + '" never met within ' +
+          Math.round(REPLIED_WAIT_MAX_MS / 86400000) + ' days — dropping step on "' +
+          thread.getFirstMessageSubject() + '".');
+        data.steps.splice(idx, 1);
+      } else {
+        Logger.log('Custom: condition "' + condition + '" not met yet — holding step on "' +
+          thread.getFirstMessageSubject() + '".');
+        idx++;
       }
+      continue;
     }
-  }
-
-  const myLast = myLastIdx !== -1 ? messages[myLastIdx] : null;
-
-  let sentAny = false;
-  while (data.steps.length > 0 && data.steps[0].sendAt <= Date.now()) {
-    const step = data.steps[0];
-
     // Per-step recipient resolution. Priority: explicit > inbound sender > cold-derive.
     let toAddr = '', ccAddr = '', recipientName = '';
     if (step.to) {
@@ -234,9 +406,10 @@ function processCustomThread_(thread, label, data, myEmails, cutoff) {
 
     const firstName = firstNameOf_(recipientName) || 'there';
     const tmpl = step.message || CONFIG.defaultTemplate;
-    const text = tmpl
+    const rendered = tmpl
       .replace(/\{firstName\}/g, firstName)
-      .replace(/\{senderFirstName\}/g, CONFIG.senderFirstName);
+      .replace(/\{senderFirstName\}/g, getSenderFirstName_());
+    const text = applySignatureToBody_(rendered);
 
     if (CONFIG.dryRun) {
       Logger.log('[DRY RUN custom] Would send to ' + toAddr +
@@ -261,7 +434,7 @@ function processCustomThread_(thread, label, data, myEmails, cutoff) {
     Logger.log('✓ Custom follow-up sent to ' + toAddr +
       (ccAddr ? ' (cc ' + ccAddr + ')' : '') +
       ' (' + (data.steps.length - 1) + ' remaining).');
-    data.steps.shift();
+    data.steps.splice(idx, 1);
     sentAny = true;
   }
 
@@ -300,18 +473,48 @@ function sendThreadReply_(thread, options) {
 
   const threadHeaders = readReplyHeaders_(options.replyTo);
 
-  const fromHeader = resolveFromHeader_();
+  const encoded = buildRawMime_({
+    to: to, cc: cc, bcc: bcc, subject: subject, body: body, html: html,
+    inReplyTo: threadHeaders.inReplyTo, references: threadHeaders.references
+  });
+  return Gmail.Users.Messages.send({
+    raw: encoded,
+    threadId: thread.getId()
+  }, 'me');
+}
 
+// Start a brand-new thread (the first email of a Studio campaign). Same MIME
+// and From: identity as follow-up replies. Returns { id, threadId }.
+function sendNewMessage_(options) {
+  if (!options.to) throw new Error('sendNewMessage_: missing to');
+  Logger.log('sendNewMessage_ → to="' + options.to + '" subject="' + options.subject + '"');
+  const encoded = buildRawMime_({
+    to: options.to, cc: options.cc || '', bcc: options.bcc || '',
+    subject: options.subject || '', body: options.body || '',
+    html: options.html || textToHtml_(options.body || '')
+  });
+  return Gmail.Users.Messages.send({ raw: encoded }, 'me');
+}
+
+// Plain text → minimal HTML: escaped, newlines as <br>.
+function textToHtml_(text) {
+  return '<div dir="ltr">' + escapeHtml_(text || '').replace(/\r?\n/g, '<br>') + '</div>';
+}
+
+// Assemble a multipart/alternative RFC 5322 message, web-safe base64 encoded
+// for Gmail.Users.Messages.send.
+function buildRawMime_(o) {
+  const fromHeader = resolveFromHeader_();
   const boundary = '----=_omc_' + Math.random().toString(36).slice(2);
   let raw = '';
   if (fromHeader) raw += 'From: ' + fromHeader + '\r\n';
-  raw += 'To: ' + to + '\r\n';
-  if (cc) raw += 'Cc: ' + cc + '\r\n';
-  if (bcc) raw += 'Bcc: ' + bcc + '\r\n';
-  raw += 'Subject: ' + encodeMimeSubject_(subject) + '\r\n';
-  if (threadHeaders.inReplyTo) {
-    raw += 'In-Reply-To: ' + threadHeaders.inReplyTo + '\r\n';
-    raw += 'References: ' + threadHeaders.references + '\r\n';
+  raw += 'To: ' + o.to + '\r\n';
+  if (o.cc) raw += 'Cc: ' + o.cc + '\r\n';
+  if (o.bcc) raw += 'Bcc: ' + o.bcc + '\r\n';
+  raw += 'Subject: ' + encodeMimeSubject_(o.subject) + '\r\n';
+  if (o.inReplyTo) {
+    raw += 'In-Reply-To: ' + o.inReplyTo + '\r\n';
+    raw += 'References: ' + o.references + '\r\n';
   }
   raw += 'MIME-Version: 1.0\r\n';
   raw += 'Content-Type: multipart/alternative; boundary="' + boundary + '"\r\n';
@@ -320,19 +523,14 @@ function sendThreadReply_(thread, options) {
   raw += 'Content-Type: text/plain; charset=UTF-8\r\n';
   raw += 'Content-Transfer-Encoding: base64\r\n';
   raw += '\r\n';
-  raw += encodeBase64Body_(body) + '\r\n';
+  raw += encodeBase64Body_(o.body) + '\r\n';
   raw += '--' + boundary + '\r\n';
   raw += 'Content-Type: text/html; charset=UTF-8\r\n';
   raw += 'Content-Transfer-Encoding: base64\r\n';
   raw += '\r\n';
-  raw += encodeBase64Body_(html) + '\r\n';
+  raw += encodeBase64Body_(o.html) + '\r\n';
   raw += '--' + boundary + '--';
-
-  const encoded = Utilities.base64EncodeWebSafe(raw);
-  return Gmail.Users.Messages.send({
-    raw: encoded,
-    threadId: thread.getId()
-  }, 'me');
+  return Utilities.base64EncodeWebSafe(raw);
 }
 
 function encodeMimeSubject_(s) {
@@ -351,36 +549,25 @@ function encodeBase64Body_(s) {
 }
 
 // Build the From: header value: '"Display Name" <email@host>' or just the email
-// if no display name is available. Display name comes from CONFIG.senderName when
-// set, otherwise from the user's Gmail "Send mail as" settings (matches what shows
-// up when they reply manually). Cached per script execution.
+// if no display name is available.
+//
+// Both parts resolve from the account running right now — never from CONFIG for
+// anyone but the owner. Sending with someone else's address in From: is rejected
+// by the Gmail API ("Invalid From header" / delegation denied), which surfaced as
+// the campaign silently never sending. Returning '' is safe: Gmail then stamps
+// the running account's own default From:. Cached per script execution.
 let _cachedFromHeader_ = null;
 function resolveFromHeader_() {
   if (_cachedFromHeader_ !== null) return _cachedFromHeader_;
 
-  let email = '';
-  try { email = Session.getActiveUser().getEmail() || ''; } catch (e) {}
-  if (!email && CONFIG.senderEmails && CONFIG.senderEmails.length) {
-    email = CONFIG.senderEmails[0];
-  }
+  const email = getRunningEmail_();
+  const name = getSenderDisplayName_();
 
-  let name = (CONFIG.senderName || '').trim();
-  if (!name) {
-    try {
-      const sendAs = Gmail.Users.Settings.SendAs.list('me');
-      const list = (sendAs && sendAs.sendAs) || [];
-      let primary = null;
-      for (let i = 0; i < list.length; i++) {
-        if (list[i].isPrimary) { primary = list[i]; break; }
-      }
-      if (!primary && list.length) primary = list[0];
-      if (primary && primary.displayName) name = String(primary.displayName).trim();
-    } catch (e) {
-      Logger.log('resolveFromHeader_: SendAs lookup failed: ' + e);
-    }
+  if (!email) {
+    Logger.log('resolveFromHeader_: no address for the running account — letting Gmail set From:.');
+    _cachedFromHeader_ = '';
+    return _cachedFromHeader_;
   }
-
-  if (!email) { _cachedFromHeader_ = ''; return _cachedFromHeader_; }
 
   if (name) {
     // ASCII names: RFC 5322 quoted-string. Non-ASCII: RFC 2047 encoded-word.
@@ -529,24 +716,148 @@ function isBusinessHours_() {
 }
 
 
-// Run this ONCE after pasting the code. Creates the FU/Custom label + the trigger.
-function setup() {
-  getOrCreateLabel_(CONFIG.labelPrefix + '/Custom');
+// ───────── Scheduler installation ────────────────────────────────
+//
+// Nothing sends unless THIS user's Google account has a time-based trigger
+// running processFollowUps. Triggers are per-account, not per-script: every
+// person who installs the add-on needs their own, and they can't get one by
+// opening the Apps Script editor (most users never can). They also disappear —
+// Google disables a trigger that errors repeatedly or blows the daily runtime
+// quota, with no notice in the UI.
+//
+// So we never rely on someone remembering to run setup(). ensureScheduler_()
+// is called every time the sidebar opens and every time a campaign is saved,
+// and repairs whatever is missing.
 
-  for (const t of ScriptApp.getProjectTriggers()) {
-    if (t.getHandlerFunction() === 'processFollowUps') ScriptApp.deleteTrigger(t);
+const SCHEDULER_ERROR_KEY = 'schedulerInstallError';
+
+function schedulerTriggers_() {
+  try {
+    return ScriptApp.getProjectTriggers().filter(function (t) {
+      return t.getHandlerFunction() === 'processFollowUps';
+    });
+  } catch (e) {
+    return [];
   }
-  ScriptApp.newTrigger('processFollowUps').timeBased().everyMinutes(1).create();
+}
 
-  Logger.log('Setup done. Trigger runs every 1 min. Use the Gmail sidebar (puzzle icon) to schedule.');
+// Make sure this account has exactly one scheduler trigger at the configured
+// interval, plus the FU/Custom label. Idempotent and cheap — safe to call on
+// every card render. Returns { ok, installed, message }.
+function ensureScheduler_() {
+  const result = { ok: false, installed: false, message: '' };
+
+  try {
+    getOrCreateLabel_(CONFIG.labelPrefix + '/Custom');
+  } catch (e) {
+    result.message = 'Could not create the ' + CONFIG.labelPrefix + '/Custom label: ' + e;
+    recordSchedulerError_(result.message);
+    return result;
+  }
+
+  let existing;
+  try {
+    existing = schedulerTriggers_();
+  } catch (e) {
+    result.message = 'Could not read triggers: ' + e;
+    recordSchedulerError_(result.message);
+    return result;
+  }
+
+  // Collapse duplicates — repeated repairs across versions can stack them up,
+  // and each one sends the whole queue again.
+  if (existing.length > 1) {
+    for (let i = 1; i < existing.length; i++) {
+      try { ScriptApp.deleteTrigger(existing[i]); } catch (e) {}
+    }
+    existing = existing.slice(0, 1);
+  }
+
+  if (existing.length === 1) {
+    result.ok = true;
+    clearSchedulerError_();
+    return result;
+  }
+
+  try {
+    ScriptApp.newTrigger('processFollowUps')
+      .timeBased()
+      .everyMinutes(normalizeInterval_(CONFIG.triggerIntervalMinutes))
+      .create();
+    result.ok = true;
+    result.installed = true;
+    clearSchedulerError_();
+    Logger.log('ensureScheduler_: installed scheduler trigger for ' + getRunningEmail_());
+  } catch (e) {
+    result.message = String(e);
+    recordSchedulerError_(result.message);
+    Logger.log('ensureScheduler_: could not install trigger: ' + e);
+  }
+  return result;
+}
+
+// Apps Script only accepts 1, 5, 10, 15 or 30 for everyMinutes().
+function normalizeInterval_(mins) {
+  const allowed = [1, 5, 10, 15, 30];
+  const n = parseInt(mins, 10);
+  if (allowed.indexOf(n) !== -1) return n;
+  return 5;
+}
+
+function recordSchedulerError_(msg) {
+  try {
+    PropertiesService.getUserProperties().setProperty(
+      SCHEDULER_ERROR_KEY, JSON.stringify({ at: Date.now(), message: String(msg) })
+    );
+  } catch (e) {}
+}
+
+function clearSchedulerError_() {
+  try { PropertiesService.getUserProperties().deleteProperty(SCHEDULER_ERROR_KEY); } catch (e) {}
+}
+
+function getSchedulerError_() {
+  try {
+    const raw = PropertiesService.getUserProperties().getProperty(SCHEDULER_ERROR_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) { return null; }
+}
+
+// Best-effort repair from any UI entry point. Never throws — a scheduler
+// problem must not stop a card from rendering.
+function ensureSchedulerQuiet_() {
+  try { return ensureScheduler_(); }
+  catch (e) { return { ok: false, installed: false, message: String(e) }; }
+}
+
+// Optional: run once from the Apps Script editor. The add-on repairs itself
+// without this, so it exists only for owner-side setup and testing.
+function setup() {
+  const res = ensureScheduler_();
+  const msg = res.ok
+    ? 'Setup done for ' + getRunningEmail_() + '. Scheduler runs every ' +
+      normalizeInterval_(CONFIG.triggerIntervalMinutes) +
+      ' min. Use the Gmail sidebar (puzzle icon) to schedule.'
+    : 'Setup FAILED: ' + res.message;
+  Logger.log(msg);
+  return msg;
 }
 
 
 // ───────── Gmail Add-on UI ───────────────────────────────────────
 
-function buildHomepage() { return buildDashboardCard_(); }
+// Opening the sidebar is the one moment we know the user is present and
+// authorized, so it doubles as the self-repair hook for the scheduler.
+function buildHomepage() {
+  ensureSchedulerQuiet_();
+  recordHeartbeat_('sidebar');
+  return buildDashboardCard_();
+}
 
 function buildAddOn(e) {
+  ensureSchedulerQuiet_();
+  recordHeartbeat_('sidebar');
   const threadId = e && e.gmail && e.gmail.threadId;
   if (!threadId) return buildDashboardCard_();
   return buildCard_(threadId);
@@ -555,23 +866,11 @@ function buildAddOn(e) {
 
 // ───────── Campaigns dashboard ─────────────────────────────────────
 //
-// Note: Gmail Add-ons cannot add an item to Gmail's left navigation rail
-// (the "Inbox / Sent / Drafts" list — that's controlled by Gmail itself).
-// What Mailmeteor shows there is actually their own web app surface, not
-// an add-on. The closest equivalent we can offer is this dashboard card,
-// reachable via the sidebar puzzle-piece icon when no thread is open, plus
-// the FU/Custom Gmail label which already acts as a "saved search" view of
-// every thread with a scheduled follow-up.
-function buildDashboardCard_() {
-  const card = CardService.newCardBuilder()
-    .setHeader(
-      CardService.newCardHeader()
-        .setTitle('Campaigns')
-        .setSubtitle('All threads with scheduled follow-ups')
-        .setImageUrl('https://www.gstatic.com/images/icons/material/system/2x/schedule_send_googblue_48dp.png')
-        .setImageStyle(CardService.ImageStyle.CIRCLE)
-    );
+// The home card and its sub-screens live in Sidebar.gs.
 
+// Every thread with something queued, soonest first. Shared by the sidebar
+// dashboard and the Studio's Campaigns page.
+function collectCampaigns_() {
   const props = PropertiesService.getUserProperties();
   const allKeys = props.getKeys().filter(function (k) { return k.indexOf('custom_') === 0; });
 
@@ -593,6 +892,7 @@ function buildDashboardCard_() {
     const next = data.steps[0];
     items.push({
       threadId: threadId,
+      campaignName: data.campaignName || '',
       subject: thread.getFirstMessageSubject() || '(no subject)',
       stepCount: data.steps.length,
       nextSendAt: next.sendAt,
@@ -602,71 +902,157 @@ function buildDashboardCard_() {
     });
   });
   items.sort(function (a, b) { return a.nextSendAt - b.nextSendAt; });
+  return items;
+}
 
-  // Summary section.
-  const summary = CardService.newCardSection();
-  summary.addWidget(CardService.newTextParagraph().setText(
-    items.length === 0
-      ? '<font color="#5f6368">No active campaigns. Open a thread and use the sidebar to schedule one.</font>'
-      : '<b>' + items.length + '</b> active campaign' + (items.length === 1 ? '' : 's') +
-        ' • <b>' + items.reduce(function (n, it) { return n + it.stepCount; }, 0) +
-        '</b> step' + (items.reduce(function (n, it) { return n + it.stepCount; }, 0) === 1 ? '' : 's') + ' queued'
-  ));
-  summary.addWidget(
-    CardService.newTextButton()
-      .setText('Refresh')
-      .setOnClickAction(CardService.newAction().setFunctionName('actionRefreshDashboard'))
+// Status panel. Every failure mode this tool has ever had was invisible from
+// Gmail — no trigger, wrong sending identity, a send that threw. They are all
+// reported here, in the sidebar, where the person using the tool actually looks.
+// from: which screen hosts the panel ('home' | 'settings'), so its buttons
+// redraw that screen.
+function buildHealthSection_(items, from) {
+  const section = CardService.newCardSection()
+    .setHeader('Status')
+    .setCollapsible(true)
+    .setNumUncollapsibleWidgets(2);
+
+  const triggers = schedulerTriggers_();
+  const running = triggers.length > 0;
+  const interval = normalizeInterval_(CONFIG.triggerIntervalMinutes);
+
+  section.addWidget(
+    CardService.newDecoratedText()
+      .setTopLabel('Scheduler')
+      .setText(running
+        ? '<font color="#188038">Running</font> — checks every ' + interval + ' min'
+        : '<font color="#d93025"><b>Not running — nothing will send</b></font>')
+      .setWrapText(true)
+      .setStartIcon(CardService.newIconImage().setIcon(
+        running ? CardService.Icon.CLOCK : CardService.Icon.DESCRIPTION
+      ))
   );
-  card.addSection(summary);
 
-  // One row per campaign.
-  if (items.length > 0) {
-    const list = CardService.newCardSection().setHeader('Scheduled');
-    items.forEach(function (it, idx) {
-      const due = it.nextSendAt - Date.now();
-      const status = due > 0 ? 'in ' + humanDelta_(due) : Math.abs(Math.round(due / 60000)) + 'm overdue';
-      const recipientHint = it.to
-        ? ' → ' + it.to.substring(0, 50)
-        : '';
-      const dt = CardService.newDecoratedText()
-        .setTopLabel(it.stepCount + ' step' + (it.stepCount === 1 ? '' : 's') +
-          ' • next ' + status)
-        .setText(escapeHtml_(it.subject))
-        .setBottomLabel(escapeHtml_(formatLocal_(it.nextSendAt, it.tz) + recipientHint))
-        .setWrapText(true)
-        .setStartIcon(CardService.newIconImage().setIcon(CardService.Icon.CLOCK))
-        .setOnClickAction(
-          CardService.newAction()
-            .setFunctionName('actionOpenThreadCard')
-            .setParameters({ threadId: it.threadId })
-        );
-      list.addWidget(dt);
+  const account = getRunningEmail_();
+  const displayName = getSenderDisplayName_();
+  section.addWidget(
+    CardService.newDecoratedText()
+      .setTopLabel('Sending as')
+      .setText(escapeHtml_(
+        (displayName ? displayName + ' ' : '') + '<' + (account || 'unknown account') + '>'
+      ))
+      .setWrapText(true)
+      .setStartIcon(CardService.newIconImage().setIcon(CardService.Icon.EMAIL))
+  );
 
-      const rowButtons = CardService.newButtonSet();
-      rowButtons.addButton(
-        CardService.newTextButton()
-          .setText('Open in Gmail')
-          .setOpenLink(CardService.newOpenLink().setUrl(it.permalink))
-      );
-      rowButtons.addButton(
-        CardService.newTextButton()
-          .setText('Cancel')
-          .setOnClickAction(
-            CardService.newAction()
-              .setFunctionName('actionDeleteCampaign')
-              .setParameters({ threadId: it.threadId })
-          )
-      );
-      list.addWidget(rowButtons);
-      if (idx < items.length - 1) list.addWidget(CardService.newDivider());
-    });
-    card.addSection(list);
+  if (!account) {
+    section.addWidget(CardService.newTextParagraph().setText(
+      '<font color="#d93025">Could not detect your Gmail address. Reopen the ' +
+      'add-on and accept the permission prompt.</font>'
+    ));
   }
 
-  return card.build();
+  const installError = getSchedulerError_();
+  if (!running && installError) {
+    section.addWidget(CardService.newTextParagraph().setText(
+      '<font color="#d93025">Last install attempt failed: ' +
+      escapeHtml_(installError.message) + '</font>'
+    ));
+  }
+
+  const lastRun = getLastRunSummary_();
+  if (lastRun) {
+    const ago = humanDelta_(Date.now() - lastRun.at);
+    section.addWidget(
+      CardService.newDecoratedText()
+        .setTopLabel('Last check')
+        .setText(ago + ' ago — sent ' + lastRun.sent +
+          ((lastRun.errors && lastRun.errors.length)
+            ? ', <font color="#d93025">' + lastRun.errors.length + ' failed</font>'
+            : ''))
+        .setWrapText(true)
+    );
+    (lastRun.errors || []).forEach(function (err) {
+      section.addWidget(CardService.newTextParagraph().setText(
+        '<font color="#d93025">' + escapeHtml_(err) + '</font>'
+      ));
+    });
+  } else if (running) {
+    section.addWidget(CardService.newTextParagraph().setText(
+      '<font color="#5f6368">No check has run yet. The first one happens within ' +
+      interval + ' minutes.</font>'
+    ));
+  }
+
+  const overdue = (items || []).filter(function (it) { return it.nextSendAt < Date.now() - 120000; });
+  if (overdue.length > 0 && running) {
+    section.addWidget(CardService.newTextParagraph().setText(
+      '<font color="#d93025">' + overdue.length + ' step(s) are past due.</font> ' +
+      'Tap "Send due now" to run immediately, then check the result here.'
+    ));
+  }
+
+  const buttons = CardService.newButtonSet();
+  buttons.addButton(
+    CardService.newTextButton()
+      .setText(running ? 'Re-check scheduler' : 'Fix scheduler')
+      .setTextButtonStyle(running
+        ? CardService.TextButtonStyle.TEXT
+        : CardService.TextButtonStyle.FILLED)
+      .setOnClickAction(CardService.newAction().setFunctionName('actionFixScheduler')
+        .setParameters({ from: from || 'home' }))
+  );
+  buttons.addButton(
+    CardService.newTextButton()
+      .setText('Send due now')
+      .setOnClickAction(CardService.newAction().setFunctionName('actionRunNow')
+        .setParameters({ from: from || 'home' }))
+  );
+  section.addWidget(buttons);
+
+  return section;
+}
+
+// Install or repair this account's scheduler on demand.
+function actionFixScheduler(e) {
+  const res = ensureScheduler_();
+  let msg;
+  if (res.ok && res.installed) msg = 'Scheduler installed. Follow-ups will send from now on.';
+  else if (res.ok) msg = 'Scheduler is running.';
+  else msg = 'Could not install the scheduler: ' + res.message;
+  return CardService.newActionResponseBuilder()
+    .setNotification(CardService.newNotification().setText(msg))
+    .setNavigation(CardService.newNavigation().updateCard(screenFor_(e)))
+    .build();
+}
+
+// Run the queue immediately instead of waiting for the next trigger. Also the
+// fastest way to see a real error message, since failures land in the panel above.
+function actionRunNow(e) {
+  let msg;
+  try {
+    processFollowUps();
+    const summary = getLastRunSummary_();
+    if (!summary) {
+      msg = 'Ran, but no result was recorded.';
+    } else if (summary.errors && summary.errors.length) {
+      msg = 'Sent ' + summary.sent + ', ' + summary.errors.length +
+        ' failed: ' + summary.errors[0];
+    } else {
+      msg = summary.sent > 0
+        ? 'Sent ' + summary.sent + ' follow-up(s).'
+        : 'Nothing was due. Anything scheduled for later stays queued.';
+    }
+  } catch (err) {
+    msg = 'Run failed: ' + err;
+  }
+  return CardService.newActionResponseBuilder()
+    .setNotification(CardService.newNotification().setText(msg))
+    .setNavigation(CardService.newNavigation().updateCard(screenFor_(e)))
+    .build();
 }
 
 function actionRefreshDashboard() {
+  ensureSchedulerQuiet_();
   return CardService.newActionResponseBuilder()
     .setNavigation(CardService.newNavigation().updateCard(buildDashboardCard_()))
     .build();
@@ -677,20 +1063,6 @@ function actionOpenThreadCard(e) {
   if (!threadId) return notify_('No thread.');
   return CardService.newActionResponseBuilder()
     .setNavigation(CardService.newNavigation().pushCard(buildCard_(threadId)))
-    .build();
-}
-
-function actionDeleteCampaign(e) {
-  const threadId = e.parameters.threadId;
-  if (!threadId) return notify_('No thread.');
-  PropertiesService.getUserProperties().deleteProperty('custom_' + threadId);
-  try {
-    const thread = GmailApp.getThreadById(threadId);
-    if (thread) clearFollowUpLabels_(thread);
-  } catch (err) {}
-  return CardService.newActionResponseBuilder()
-    .setNotification(CardService.newNotification().setText('Campaign cancelled.'))
-    .setNavigation(CardService.newNavigation().updateCard(buildDashboardCard_()))
     .build();
 }
 
@@ -715,405 +1087,543 @@ function canonicalThreadId_(idLike) {
   return idLike;
 }
 
+const ICON_URL_ = 'https://www.gstatic.com/images/icons/material/system/2x/schedule_send_googblue_48dp.png';
+
+// Main thread card: who this goes to, what's already queued, and one-click
+// "Start" for every saved sequence. The detailed builder lives on its own card
+// (buildBuilderCard_) so the common path is a single click.
 function buildCard_(threadId) {
   threadId = canonicalThreadId_(threadId);
-  const card = CardService.newCardBuilder()
-    .setHeader(
-      CardService.newCardHeader()
-        .setTitle('Follow-up Scheduler')
-        .setImageUrl('https://www.gstatic.com/images/icons/material/system/2x/schedule_send_googblue_48dp.png')
-        .setImageStyle(CardService.ImageStyle.CIRCLE)
-    );
+  if (!threadId) return buildDashboardCard_();
+  const ctx = getThreadContext_(threadId);
 
-  // Thread context — subject + recipient as clean DecoratedText rows.
-  if (threadId) {
-    const ctx = getThreadContext_(threadId);
-    if (ctx) {
-      const ctxSection = CardService.newCardSection().setHeader('Thread');
-      ctxSection.addWidget(
-        CardService.newDecoratedText()
-          .setTopLabel('Subject')
-          .setText(escapeHtml_(ctx.subject || '(no subject)'))
-          .setWrapText(true)
-          .setStartIcon(
-            CardService.newIconImage().setIcon(CardService.Icon.EMAIL)
-          )
-      );
-      const recipientText = ctx.recipient
-        ? (ctx.recipient.name || ctx.recipient.email)
-        : 'unknown';
-      const recipientBottom = ctx.recipient && ctx.recipient.name
-        ? ctx.recipient.email
-        : '';
-      ctxSection.addWidget(
-        CardService.newDecoratedText()
-          .setTopLabel('To')
-          .setText(escapeHtml_(recipientText))
-          .setBottomLabel(escapeHtml_(recipientBottom))
-          .setWrapText(true)
-          .setStartIcon(
-            CardService.newIconImage().setIcon(CardService.Icon.PERSON)
-          )
-      );
-      card.addSection(ctxSection);
-    }
+  const header = CardService.newCardHeader()
+    .setTitle('Follow-ups')
+    .setImageUrl(ICON_URL_)
+    .setImageStyle(CardService.ImageStyle.CIRCLE);
+  if (ctx) header.setSubtitle(ctx.subject || '(no subject)');
+  const card = CardService.newCardBuilder().setHeader(header);
+
+  if (ctx && ctx.recipient) {
+    const who = CardService.newCardSection();
+    who.addWidget(
+      CardService.newDecoratedText()
+        .setTopLabel('Follow-ups go to')
+        .setText(escapeHtml_(ctx.recipient.name || ctx.recipient.email))
+        .setBottomLabel(escapeHtml_(ctx.recipient.name ? ctx.recipient.email : ''))
+        .setWrapText(true)
+        .setStartIcon(CardService.newIconImage().setIcon(CardService.Icon.PERSON))
+    );
+    card.addSection(who);
   }
 
-  // Scheduled queue.
-  if (threadId) {
-    const queue = getQueueForThread_(threadId);
-    if (queue.length > 0) {
-      const qSection = CardService.newCardSection()
-        .setHeader('Scheduled • ' + queue.length + (queue.length === 1 ? ' step' : ' steps'));
-      queue.forEach(function (step, idx) {
-        const when = formatLocal_(step.sendAt, step.tz);
-        const preview = (step.message || '(uses default template)').substring(0, 140);
-        const toLabel = step.to
-          ? ' • → ' + step.to.substring(0, 60)
-          : '';
-        qSection.addWidget(
-          CardService.newDecoratedText()
-            .setTopLabel('Step ' + (idx + 1) + ' • ' + when + toLabel)
-            .setText(escapeHtml_(preview))
-            .setWrapText(true)
-            .setStartIcon(
-              CardService.newIconImage().setIcon(CardService.Icon.CLOCK)
-            )
-            .setButton(
-              CardService.newTextButton()
-                .setText('Remove')
-                .setOnClickAction(
-                  CardService.newAction()
-                    .setFunctionName('actionRemoveStep')
-                    .setParameters({ threadId: threadId, index: String(idx) })
-                )
-            )
-        );
-      });
-      card.addSection(qSection);
-    }
-  }
-
-  // ── Build campaign: multi-step relative offsets, plain-text per step ───────
-  if (threadId) {
-    const draft = getDraft_(threadId);
-    const campaign = CardService.newCardSection().setHeader('Build campaign');
-
-    campaign.addWidget(CardService.newTextParagraph().setText(
-      '<font color="#5f6368">Each step waits the chosen time after the previous step ' +
-      'sends. Auto-cancels if the recipient replies at any point.</font>'
-    ));
-
-    campaign.addWidget(
-      CardService.newTextInput()
-        .setFieldName('recipients')
-        .setTitle('Send to (optional)')
-        .setHint('Override recipients. Comma-separated emails or "Name <email>". Blank = auto-detect from the thread.')
-        .setValue(draft.recipients || '')
-    );
-    campaign.addWidget(
-      CardService.newTextInput()
-        .setFieldName('cc')
-        .setTitle('Cc (applied to every step)')
-        .setHint('Comma-separated. Added to the default recipients, not replacing them.')
-        .setValue(draft.cc || '')
-    );
-    campaign.addWidget(
-      CardService.newTextInput()
-        .setFieldName('bcc')
-        .setTitle('Bcc (applied to every step)')
-        .setHint('Comma-separated. Hidden from other recipients.')
-        .setValue(draft.bcc || '')
-    );
-
-    draft.steps.forEach(function (step, idx) {
-      campaign.addWidget(CardService.newDivider());
-      campaign.addWidget(CardService.newTextParagraph().setText(
-        '<b>Step ' + (idx + 1) + '</b>' +
-        (idx === 0
-          ? ' <font color="#5f6368">— wait this long after now</font>'
-          : ' <font color="#5f6368">— wait this long after step ' + idx + ' sends</font>')
-      ));
-      campaign.addWidget(
-        CardService.newTextInput()
-          .setFieldName('amount_' + idx)
-          .setTitle('Wait')
-          .setValue(String(step.amount || 3))
+  // Already scheduled on this thread.
+  const queue = getQueueForThread_(threadId);
+  if (queue.length > 0) {
+    const qSection = CardService.newCardSection()
+      .setHeader('Scheduled · ' + queue.length + (queue.length === 1 ? ' email' : ' emails'));
+    queue.forEach(function (step, idx) {
+      const when = formatLocal_(step.sendAt, step.tz);
+      const cond = conditionLabel_(step.condition);
+      qSection.addWidget(
+        CardService.newDecoratedText()
+          .setTopLabel(when + (cond ? ' · ' + cond : ''))
+          .setText(escapeHtml_((step.message || '(default bump message)').substring(0, 140)))
+          .setWrapText(true)
+          .setStartIcon(CardService.newIconImage().setIcon(CardService.Icon.CLOCK))
+          .setButton(
+            CardService.newTextButton()
+              .setText('Remove')
+              .setOnClickAction(
+                CardService.newAction()
+                  .setFunctionName('actionRemoveStep')
+                  .setParameters({ threadId: threadId, index: String(idx) })
+              )
+          )
       );
-      campaign.addWidget(
-        CardService.newSelectionInput()
-          .setType(CardService.SelectionInputType.DROPDOWN)
-          .setFieldName('unit_' + idx)
-          .setTitle('Unit')
-          .addItem('days', 'days', step.unit !== 'hours' && step.unit !== 'minutes')
-          .addItem('hours', 'hours', step.unit === 'hours')
-          .addItem('minutes', 'minutes', step.unit === 'minutes')
-      );
-      campaign.addWidget(
-        CardService.newTextInput()
-          .setFieldName('message_' + idx)
-          .setTitle('Message')
-          .setMultiline(true)
-          .setValue(step.message || '')
-          .setHint('Blank = use default template. Placeholders: {firstName}, {senderFirstName}')
-      );
-      campaign.addWidget(
-        CardService.newTextInput()
-          .setFieldName('cc_' + idx)
-          .setTitle('Cc — only this step (optional)')
-          .setHint('Comma-separated. Added on top of campaign Cc and default recipients.')
-          .setValue(step.cc || '')
-      );
-      campaign.addWidget(
-        CardService.newTextInput()
-          .setFieldName('bcc_' + idx)
-          .setTitle('Bcc — only this step (optional)')
-          .setHint('Comma-separated. Added on top of campaign Bcc.')
-          .setValue(step.bcc || '')
-      );
-      if (draft.steps.length > 1) {
-        campaign.addWidget(
-          CardService.newTextButton()
-            .setText('Remove step ' + (idx + 1))
-            .setOnClickAction(
-              CardService.newAction()
-                .setFunctionName('actionRemoveDraftStep')
-                .setParameters({ threadId: threadId, index: String(idx) })
-            )
-        );
-      }
     });
+    qSection.addWidget(
+      CardService.newTextButton()
+        .setText('Cancel all')
+        .setOnClickAction(
+          CardService.newAction()
+            .setFunctionName('actionAskStop')
+            .setParameters({ threadId: threadId, from: 'thread' })
+        )
+    );
+    card.addSection(qSection);
+  }
 
-    campaign.addWidget(CardService.newDivider());
-
-    const builderButtons = CardService.newButtonSet();
-    if (draft.steps.length < 10) {
-      builderButtons.addButton(
-        CardService.newTextButton()
-          .setText('+ Add step')
-          .setOnClickAction(
-            CardService.newAction()
-              .setFunctionName('actionAddDraftStep')
-              .setParameters({ threadId: threadId })
+  // One-click sequences.
+  const sequences = studioSequences_();
+  const start = CardService.newCardSection()
+    .setHeader(queue.length ? 'Add a sequence' : 'Start a sequence');
+  if (sequences.length === 0) {
+    start.addWidget(CardService.newTextParagraph().setText(
+      '<font color="#5f6368">No sequences yet. Tap <b>New sequence</b> below ' +
+      'to write your follow-ups once and reuse them on every email, or use ' +
+      '<b>Custom follow-up</b> for a one-off.</font>'
+    ));
+  } else {
+    start.addWidget(CardService.newTextParagraph().setText(
+      '<font color="#5f6368">One click schedules every follow-up as a reply ' +
+      'on this thread. Stops automatically when they reply.</font>'
+    ));
+    sequences.forEach(function (seq) {
+      const first = (seq.steps[0] && seq.steps[0].message) || '';
+      start.addWidget(
+        CardService.newDecoratedText()
+          .setTopLabel(escapeHtml_(seq.name))
+          .setText(escapeHtml_(describeSequence_(seq.steps)))
+          .setBottomLabel(escapeHtml_(first.replace(/\s+/g, ' ').substring(0, 70)))
+          .setWrapText(true)
+          .setButton(
+            CardService.newTextButton()
+              .setText('Start')
+              .setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+              .setOnClickAction(
+                CardService.newAction()
+                  .setFunctionName('actionStartSequence')
+                  .setParameters({ threadId: threadId, name: seq.name })
+              )
           )
       );
-    }
+    });
+  }
+  card.addSection(start);
+
+  const footer = CardService.newFixedFooter().setPrimaryButton(
+    CardService.newTextButton()
+      .setText('Custom follow-up')
+      .setOnClickAction(
+        CardService.newAction()
+          .setFunctionName('actionOpenBuilder')
+          .setParameters({ threadId: threadId })
+      )
+  );
+  footer.setSecondaryButton(
+    CardService.newTextButton()
+      .setText('New sequence')
+      .setOnClickAction(
+        CardService.newAction()
+          .setFunctionName('actionOpenSequenceEditor')
+          .setParameters({ returnTo: 'thread', threadId: threadId })
+      )
+  );
+  card.setFixedFooter(footer);
+
+  return card.build();
+}
+
+function conditionLabel_(condition) {
+  if (condition === 'replied') return 'if replied';
+  if (condition === 'always') return 'always';
+  return 'if no reply';
+}
+
+// "3 follow-ups · day 3, 7, 14" (cumulative days) or "2h → 1d" for mixed units.
+function describeSequence_(steps) {
+  const n = steps.length;
+  const head = n + (n === 1 ? ' follow-up' : ' follow-ups');
+  if (n === 0) return head;
+  const allDays = steps.every(function (s) { return s.unit === 'days'; });
+  if (allDays) {
+    let day = 0;
+    return head + ' · day ' + steps.map(function (s) { day += s.amount; return day; }).join(', ');
+  }
+  return head + ' · ' + steps.map(function (s) {
+    return s.amount + (s.unit === 'hours' ? 'h' : s.unit === 'minutes' ? 'm' : 'd');
+  }).join(' → ');
+}
+
+function actionOpenBuilder(e) {
+  const threadId = e.parameters.threadId;
+  if (!threadId) return notify_('Open a thread first.');
+  return CardService.newActionResponseBuilder()
+    .setNavigation(CardService.newNavigation().pushCard(buildBuilderCard_(threadId)))
+    .build();
+}
+
+// One click: schedule a saved sequence's follow-ups on this thread.
+function actionStartSequence(e) {
+  const threadId = e.parameters.threadId;
+  const name = e.parameters.name;
+  if (!threadId) return notify_('Open a thread first.');
+  const seq = getSequence_(name);
+  if (!seq || !Array.isArray(seq.steps) || seq.steps.length === 0) {
+    return notify_('Sequence "' + name + '" not found or has no follow-ups.');
+  }
+  const steps = seq.steps.slice(0, MAX_CAMPAIGN_STEPS).map(normalizeSeqStep_);
+  const tz = getPreferredTz_();
+  const armed = armThreadWithSteps_(threadId, steps, {
+    tz: tz,
+    recipients: seq.recipients || '',
+    cc: seq.cc || '',
+    bcc: seq.bcc || ''
+  });
+  const scheduler = ensureSchedulerQuiet_();
+  const firstAt = armed.steps[0].sendAt;
+  return CardService.newActionResponseBuilder()
+    .setNotification(CardService.newNotification().setText(
+      scheduler.ok
+        ? 'Started "' + name + '" — first follow-up ' + formatLocal_(firstAt, tz) + '.'
+        : 'Saved, but the scheduler is NOT running — nothing will send. ' +
+          'Open the Campaigns dashboard and tap "Fix scheduler".'
+    ))
+    .setNavigation(CardService.newNavigation().updateCard(buildCard_(threadId)))
+    .build();
+}
+
+// Detailed builder: per-step timing, conditions, recipients, one-offs.
+function buildBuilderCard_(threadId) {
+  threadId = canonicalThreadId_(threadId);
+  const ctx = getThreadContext_(threadId);
+  const header = CardService.newCardHeader()
+    .setTitle('Custom follow-up')
+    .setImageUrl(ICON_URL_)
+    .setImageStyle(CardService.ImageStyle.CIRCLE);
+  if (ctx) header.setSubtitle(ctx.subject || '(no subject)');
+  const card = CardService.newCardBuilder().setHeader(header);
+
+  const draft = getDraft_(threadId);
+
+  // Campaign-level settings.
+  const settings = CardService.newCardSection();
+  settings.addWidget(CardService.newTextParagraph().setText(
+    '<font color="#5f6368">Each email waits the chosen time after the previous one ' +
+    'sends. Stops automatically if they reply.</font>'
+  ));
+  settings.addWidget(buildTimezoneDropdown_('campaignTz'));
+  const autoName = (function () {
+    try { return autoGenerateCampaignName_(GmailApp.getThreadById(threadId)); }
+    catch (err) { return ''; }
+  })();
+  settings.addWidget(
+    CardService.newTextInput()
+      .setFieldName('campaignName')
+      .setTitle('Campaign name (optional)')
+      .setHint(autoName ? 'Blank = "' + autoName + '"' : 'Shown on the Campaigns dashboard.')
+      .setValue(draft.campaignName || '')
+  );
+  card.addSection(settings);
+
+  const recip = CardService.newCardSection()
+    .setHeader('Recipients')
+    .setCollapsible(true)
+    .setNumUncollapsibleWidgets(0);
+  recip.addWidget(
+    CardService.newTextInput()
+      .setFieldName('recipients')
+      .setTitle('Send to (optional)')
+      .setHint('Blank = auto-detect from the thread. Comma-separated, "Name <email>" ok.')
+      .setValue(draft.recipients || '')
+  );
+  recip.addWidget(
+    CardService.newTextInput()
+      .setFieldName('cc')
+      .setTitle('Cc (every email)')
+      .setHint('Added to the thread\'s recipients, not replacing them.')
+      .setValue(draft.cc || '')
+  );
+  recip.addWidget(
+    CardService.newTextInput()
+      .setFieldName('bcc')
+      .setTitle('Bcc (every email)')
+      .setValue(draft.bcc || '')
+  );
+  card.addSection(recip);
+
+  draft.steps.forEach(function (step, idx) {
+    card.addSection(buildStepSection_(idx, step, {
+      total: draft.steps.length,
+      firstLabel: 'Wait this long from now',
+      exactDate: true,
+      removeAction: CardService.newAction()
+        .setFunctionName('actionRemoveDraftStep')
+        .setParameters({ threadId: threadId, index: String(idx) })
+    }));
+  });
+
+  const actions = CardService.newCardSection();
+  const builderButtons = CardService.newButtonSet();
+  if (draft.steps.length < MAX_CAMPAIGN_STEPS) {
     builderButtons.addButton(
       CardService.newTextButton()
-        .setText('Save campaign')
-        .setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+        .setText('+ Add follow-up')
+        .setOnClickAction(
+          CardService.newAction()
+            .setFunctionName('actionAddDraftStep')
+            .setParameters({ threadId: threadId })
+        )
+    );
+  }
+  builderButtons.addButton(
+    CardService.newTextButton()
+      .setText('Clear')
+      .setOnClickAction(
+        CardService.newAction()
+          .setFunctionName('actionClearDraft')
+          .setParameters({ threadId: threadId })
+      )
+  );
+  actions.addWidget(builderButtons);
+  card.addSection(actions);
+
+  // Sequences: load into the builder, or save the builder as a new one.
+  const sequences = listSequences_();
+  const seqSection = CardService.newCardSection()
+    .setHeader('Sequences')
+    .setCollapsible(true)
+    .setNumUncollapsibleWidgets(0);
+  if (sequences.length > 0) {
+    const seqDd = CardService.newSelectionInput()
+      .setType(CardService.SelectionInputType.DROPDOWN)
+      .setFieldName('sequenceName')
+      .setTitle('Saved sequences')
+      .addItem('— select —', '', true);
+    sequences.forEach(function (n) { seqDd.addItem(n, n, false); });
+    seqSection.addWidget(seqDd);
+    seqSection.addWidget(
+      CardService.newButtonSet()
+        .addButton(
+          CardService.newTextButton()
+            .setText('Load into builder')
+            .setOnClickAction(
+              CardService.newAction()
+                .setFunctionName('actionLoadSequence')
+                .setParameters({ threadId: threadId })
+            )
+        )
+        .addButton(
+          CardService.newTextButton()
+            .setText('Delete')
+            .setOnClickAction(
+              CardService.newAction()
+                .setFunctionName('actionDeleteSequence')
+                .setParameters({ threadId: threadId })
+            )
+        )
+    );
+    seqSection.addWidget(CardService.newDivider());
+  }
+  seqSection.addWidget(
+    CardService.newTextInput()
+      .setFieldName('newSequenceName')
+      .setTitle('Save these follow-ups as a sequence')
+      .setHint('Name it, then Save. Reuse it with one click on any thread.')
+  );
+  seqSection.addWidget(
+    CardService.newTextButton()
+      .setText('Save as sequence')
+      .setOnClickAction(
+        CardService.newAction()
+          .setFunctionName('actionSaveSequence')
+          .setParameters({ threadId: threadId })
+      )
+  );
+  card.addSection(seqSection);
+
+  // One-off at an exact time.
+  const oneOff = CardService.newCardSection()
+    .setHeader('One email at an exact time')
+    .setCollapsible(true)
+    .setNumUncollapsibleWidgets(0);
+  const prefillTz = getPreferredTz_();
+  const tomorrowStr = Utilities.formatDate(new Date(Date.now() + 86400000), prefillTz, 'yyyy-MM-dd');
+  const prefillMs = Utilities.parseDate(tomorrowStr + ' 09:00', 'UTC', 'yyyy-MM-dd HH:mm').getTime();
+  oneOff.addWidget(
+    CardService.newDateTimePicker()
+      .setFieldName('sendAt')
+      .setTitle('Send at')
+      .setValueInMsSinceEpoch(prefillMs)
+  );
+  oneOff.addWidget(buildTimezoneDropdown_());
+  oneOff.addWidget(
+    CardService.newTextInput()
+      .setFieldName('oneOffMessage')
+      .setTitle('Message (optional)')
+      .setMultiline(true)
+      .setHint('Blank = default bump. Placeholders: {firstName}, {senderFirstName}')
+  );
+  oneOff.addWidget(
+    CardService.newTextInput()
+      .setFieldName('oneOffRecipients')
+      .setTitle('Send to (optional)')
+      .setHint('Blank = auto-detect from the thread.')
+  );
+  oneOff.addWidget(CardService.newTextInput().setFieldName('oneOffCc').setTitle('Cc (optional)'));
+  oneOff.addWidget(CardService.newTextInput().setFieldName('oneOffBcc').setTitle('Bcc (optional)'));
+  oneOff.addWidget(
+    CardService.newTextButton()
+      .setText('Schedule this email')
+      .setOnClickAction(
+        CardService.newAction()
+          .setFunctionName('actionScheduleOneOff')
+          .setParameters({ threadId: threadId })
+      )
+  );
+  card.addSection(oneOff);
+
+  // Default-message presets.
+  const presets = CardService.newCardSection()
+    .setHeader('Quick presets (default message)')
+    .setCollapsible(true)
+    .setNumUncollapsibleWidgets(0);
+  const presetButtons = CardService.newButtonSet();
+  ['3-7-14', '1-3-7', '2-5-10'].forEach(function (p) {
+    presetButtons.addButton(
+      CardService.newTextButton()
+        .setText(p + ' days')
+        .setOnClickAction(
+          CardService.newAction()
+            .setFunctionName('actionInsertSequence')
+            .setParameters({ threadId: threadId, preset: p })
+        )
+    );
+  });
+  presets.addWidget(presetButtons);
+  card.addSection(presets);
+
+  card.setFixedFooter(
+    CardService.newFixedFooter().setPrimaryButton(
+      CardService.newTextButton()
+        .setText('Save & schedule')
         .setOnClickAction(
           CardService.newAction()
             .setFunctionName('actionSaveCampaign')
             .setParameters({ threadId: threadId })
         )
-    );
-    builderButtons.addButton(
-      CardService.newTextButton()
-        .setText('Clear draft')
-        .setOnClickAction(
-          CardService.newAction()
-            .setFunctionName('actionClearDraft')
-            .setParameters({ threadId: threadId })
-        )
-    );
-    campaign.addWidget(builderButtons);
-
-    if (draft.steps.length >= 10) {
-      campaign.addWidget(CardService.newTextParagraph().setText(
-        '<font color="#5f6368"><i>Max 10 steps. Remove one to add another.</i></font>'
-      ));
-    }
-
-    card.addSection(campaign);
-  }
-
-  // ── Templates: save / load / delete saved cadences ─────────────────────────
-  if (threadId) {
-    const templates = listTemplates_();
-    const tplSection = CardService.newCardSection()
-      .setHeader('Templates')
-      .setCollapsible(true)
-      .setNumUncollapsibleWidgets(0);
-
-    if (templates.length > 0) {
-      const dd = CardService.newSelectionInput()
-        .setType(CardService.SelectionInputType.DROPDOWN)
-        .setFieldName('templateName')
-        .setTitle('Saved templates')
-        .addItem('— select —', '', true);
-      templates.forEach(function (t) { dd.addItem(t, t, false); });
-      tplSection.addWidget(dd);
-
-      const tplButtons = CardService.newButtonSet();
-      tplButtons.addButton(
-        CardService.newTextButton()
-          .setText('Load')
-          .setOnClickAction(
-            CardService.newAction()
-              .setFunctionName('actionLoadTemplate')
-              .setParameters({ threadId: threadId })
-          )
-      );
-      tplButtons.addButton(
-        CardService.newTextButton()
-          .setText('Delete')
-          .setOnClickAction(
-            CardService.newAction()
-              .setFunctionName('actionDeleteTemplate')
-              .setParameters({ threadId: threadId })
-          )
-      );
-      tplSection.addWidget(tplButtons);
-      tplSection.addWidget(CardService.newDivider());
-    } else {
-      tplSection.addWidget(CardService.newTextParagraph().setText(
-        '<font color="#5f6368">No saved templates yet.</font>'
-      ));
-    }
-
-    tplSection.addWidget(
-      CardService.newTextInput()
-        .setFieldName('newTemplateName')
-        .setTitle('Save current draft as template')
-        .setHint('Enter a name then click Save')
-    );
-    tplSection.addWidget(
-      CardService.newTextButton()
-        .setText('Save as template')
-        .setOnClickAction(
-          CardService.newAction()
-            .setFunctionName('actionSaveTemplate')
-            .setParameters({ threadId: threadId })
-        )
-    );
-    card.addSection(tplSection);
-  }
-
-  // ── One-off scheduled message: specific date/time, single step ─────────────
-  if (threadId) {
-    const oneOff = CardService.newCardSection()
-      .setHeader('One-off at specific time')
-      .setCollapsible(true)
-      .setNumUncollapsibleWidgets(0);
-
-    oneOff.addWidget(CardService.newTextParagraph().setText(
-      '<font color="#5f6368">Schedule a single follow-up at an exact date/time. ' +
-      'For multi-step cadences, use Build campaign above.</font>'
-    ));
-
-    const prefillTz = getPreferredTz_();
-    const tomorrowMs = Date.now() + 24 * 60 * 60 * 1000;
-    const tomorrowStr = Utilities.formatDate(new Date(tomorrowMs), prefillTz, 'yyyy-MM-dd');
-    const prefillMs = Utilities.parseDate(tomorrowStr + ' 09:00', 'UTC', 'yyyy-MM-dd HH:mm').getTime();
-    oneOff.addWidget(
-      CardService.newDateTimePicker()
-        .setFieldName('sendAt')
-        .setTitle('Send at')
-        .setValueInMsSinceEpoch(prefillMs)
-    );
-    oneOff.addWidget(buildTimezoneDropdown_());
-    oneOff.addWidget(
-      CardService.newTextInput()
-        .setFieldName('oneOffRecipients')
-        .setTitle('Send to (optional)')
-        .setHint('Override recipients. Blank = auto-detect from the thread.')
-    );
-    oneOff.addWidget(
-      CardService.newTextInput()
-        .setFieldName('oneOffCc')
-        .setTitle('Cc (optional)')
-        .setHint('Comma-separated. Added to default recipients, not replacing them.')
-    );
-    oneOff.addWidget(
-      CardService.newTextInput()
-        .setFieldName('oneOffBcc')
-        .setTitle('Bcc (optional)')
-        .setHint('Comma-separated. Hidden from other recipients.')
-    );
-    oneOff.addWidget(
-      CardService.newTextInput()
-        .setFieldName('oneOffMessage')
-        .setTitle('Message (optional)')
-        .setMultiline(true)
-        .setHint('Blank = use default template. Placeholders: {firstName}, {senderFirstName}')
-    );
-    oneOff.addWidget(
-      CardService.newTextButton()
-        .setText('Add one-off')
-        .setOnClickAction(
-          CardService.newAction()
-            .setFunctionName('actionScheduleOneOff')
-            .setParameters({ threadId: threadId })
-        )
-    );
-    card.addSection(oneOff);
-  }
-
-  // Quick multi-step sequences (one click adds N steps at once).
-  if (threadId) {
-    const seqSection = CardService.newCardSection()
-      .setHeader('Quick sequences')
-      .setCollapsible(true)
-      .setNumUncollapsibleWidgets(0);
-    seqSection.addWidget(
-      CardService.newTextParagraph().setText(
-        '<font color="#5f6368">Adds multiple steps in one click.</font>'
-      )
-    );
-    const seqButtons = CardService.newButtonSet();
-    seqButtons.addButton(
-      CardService.newTextButton()
-        .setText('3-7-14 days')
-        .setOnClickAction(
-          CardService.newAction()
-            .setFunctionName('actionInsertSequence')
-            .setParameters({ threadId: threadId, preset: '3-7-14' })
-        )
-    );
-    seqButtons.addButton(
-      CardService.newTextButton()
-        .setText('1-3-7 days')
-        .setOnClickAction(
-          CardService.newAction()
-            .setFunctionName('actionInsertSequence')
-            .setParameters({ threadId: threadId, preset: '1-3-7' })
-        )
-    );
-    seqButtons.addButton(
-      CardService.newTextButton()
-        .setText('2-5-10 days')
-        .setOnClickAction(
-          CardService.newAction()
-            .setFunctionName('actionInsertSequence')
-            .setParameters({ threadId: threadId, preset: '2-5-10' })
-        )
-    );
-    seqSection.addWidget(seqButtons);
-    card.addSection(seqSection);
-  }
-
-  // Cancel all on thread.
-  if (threadId) {
-    const cancelSection = CardService.newCardSection();
-    cancelSection.addWidget(
-      CardService.newTextButton()
-        .setText('Cancel all on this thread')
-        .setOnClickAction(
-          CardService.newAction()
-            .setFunctionName('actionCancel')
-            .setParameters({ threadId: threadId })
-        )
-    );
-    card.addSection(cancelSection);
-  }
+    )
+  );
 
   return card.build();
+}
+
+// One follow-up's editor: timing + message up front, the rest collapsed.
+// Field names match readFormDraft_. Shared by the thread builder and the
+// sequence editor. opts: { total, firstLabel, exactDate, removeAction }
+function buildStepSection_(idx, step, opts) {
+  const sec = CardService.newCardSection()
+    .setHeader('Follow-up ' + (idx + 1))
+    .setCollapsible(true)
+    .setNumUncollapsibleWidgets(4);
+  sec.addWidget(CardService.newTextParagraph().setText(
+    '<font color="#5f6368">' +
+    (idx === 0 ? opts.firstLabel : 'Wait this long after follow-up ' + idx) +
+    '</font>'
+  ));
+  sec.addWidget(
+    CardService.newTextInput()
+      .setFieldName('amount_' + idx)
+      .setTitle('Wait')
+      .setValue(String(step.amount || 3))
+  );
+  sec.addWidget(
+    CardService.newSelectionInput()
+      .setType(CardService.SelectionInputType.DROPDOWN)
+      .setFieldName('unit_' + idx)
+      .setTitle('Unit')
+      .addItem('days', 'days', step.unit !== 'hours' && step.unit !== 'minutes')
+      .addItem('hours', 'hours', step.unit === 'hours')
+      .addItem('minutes', 'minutes', step.unit === 'minutes')
+  );
+  sec.addWidget(
+    CardService.newTextInput()
+      .setFieldName('message_' + idx)
+      .setTitle('Message')
+      .setMultiline(true)
+      .setValue(step.message || '\n\n')
+      .setHint('Blank = default bump. Placeholders: {firstName}, {senderFirstName}')
+  );
+  // Below the fold.
+  sec.addWidget(buildConditionDropdown_('condition_' + idx, step.condition));
+  buildAtTimeFields_('atTime_' + idx, step.atTime).forEach(function (w) { sec.addWidget(w); });
+  if (opts.exactDate) {
+    const absPicker = CardService.newDateTimePicker()
+      .setFieldName('sendAtAbs_' + idx)
+      .setTitle('Or on an exact date/time (overrides wait)');
+    if (step.sendAtAbs) absPicker.setValueInMsSinceEpoch(step.sendAtAbs);
+    sec.addWidget(absPicker);
+  }
+  sec.addWidget(
+    CardService.newTextInput()
+      .setFieldName('cc_' + idx)
+      .setTitle('Cc — this email only')
+      .setValue(step.cc || '')
+  );
+  sec.addWidget(
+    CardService.newTextInput()
+      .setFieldName('bcc_' + idx)
+      .setTitle('Bcc — this email only')
+      .setValue(step.bcc || '')
+  );
+  if (opts.total > 1) {
+    sec.addWidget(
+      CardService.newTextButton()
+        .setText('Remove follow-up ' + (idx + 1))
+        .setOnClickAction(opts.removeAction)
+    );
+  }
+  return sec;
 }
 
 function formatLocal_(ms, tz) {
   const zone = tz || getPreferredTz_();
   return Utilities.formatDate(new Date(ms), zone, 'MMM d, h:mm a z');
+}
+
+// Parse "HH:MM" or "H:MM" (24h). Returns { h, m } or null.
+function parseHHMM_(s) {
+  if (!s) return null;
+  const m = String(s).trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = parseInt(m[1], 10);
+  const mn = parseInt(m[2], 10);
+  if (h < 0 || h > 23 || mn < 0 || mn > 59) return null;
+  return { h: h, m: mn };
+}
+
+// Read a SelectionInput (DROPDOWN/RADIO/etc.) field as string. Tries commonEventObject first.
+function readSelectionInput_(e, fieldName) {
+  try {
+    const ce = e && e.commonEventObject;
+    if (ce && ce.formInputs && ce.formInputs[fieldName]) {
+      const si = ce.formInputs[fieldName].stringInputs;
+      if (si && si.value && si.value.length > 0) {
+        return String(si.value[0] || '').trim();
+      }
+    }
+  } catch (err) {}
+  try {
+    const v = e && e.formInput && e.formInput[fieldName];
+    if (v) return String(v).trim();
+  } catch (err) {}
+  return '';
+}
+
+// Take the wall-clock date of targetMs in tz, replace the time with hhmm in tz.
+// If the resulting moment is earlier than targetMs, roll forward by one day.
+function snapToTimeOfDay_(targetMs, hhmm, tz) {
+  const dateStr = Utilities.formatDate(new Date(targetMs), tz, 'yyyy-MM-dd');
+  const timeStr = ('0' + hhmm.h).slice(-2) + ':' + ('0' + hhmm.m).slice(-2);
+  let snapped = Utilities.parseDate(dateStr + ' ' + timeStr, tz, 'yyyy-MM-dd HH:mm').getTime();
+  if (snapped < targetMs) snapped += 24 * 60 * 60 * 1000;
+  return snapped;
+}
+
+// Compute a single step's send time given the previous step's send time (or "now" for step 1).
+//   - No atTime: exact offset (amount * unit) after prevMs.
+//   - With atTime: apply the offset first, then snap to that wall-clock time on
+//     the resulting date (rolling to the next day if that moment already passed).
+function computeStepSendAt_(prevMs, amount, unit, atTime, tz) {
+  let mult;
+  if (unit === 'minutes') mult = 60 * 1000;
+  else if (unit === 'hours') mult = 60 * 60 * 1000;
+  else mult = 24 * 60 * 60 * 1000;
+  const baseMs = prevMs + amount * mult;
+  const hhmm = parseHHMM_(atTime);
+  if (!hhmm) return baseMs;
+  return snapToTimeOfDay_(baseMs, hhmm, tz);
 }
 
 
@@ -1125,8 +1635,8 @@ const MAX_CAMPAIGN_STEPS = 10;
 
 function defaultDraft_() {
   return {
-    steps: [{ amount: 3, unit: 'days', message: '', cc: '', bcc: '' }],
-    recipients: '', cc: '', bcc: ''
+    steps: [{ amount: 3, unit: 'days', atTime: '', sendAtAbs: 0, condition: 'no_reply', message: '', cc: '', bcc: '' }],
+    recipients: '', cc: '', bcc: '', campaignName: ''
   };
 }
 
@@ -1139,9 +1649,13 @@ function getDraft_(threadId) {
     if (typeof d.recipients !== 'string') d.recipients = '';
     if (typeof d.cc !== 'string') d.cc = '';
     if (typeof d.bcc !== 'string') d.bcc = '';
+    if (typeof d.campaignName !== 'string') d.campaignName = '';
     d.steps.forEach(function (s) {
       if (typeof s.cc !== 'string') s.cc = '';
       if (typeof s.bcc !== 'string') s.bcc = '';
+      if (typeof s.atTime !== 'string') s.atTime = '';
+      if (typeof s.condition !== 'string') s.condition = 'no_reply';
+      if (typeof s.sendAtAbs !== 'number') s.sendAtAbs = 0;
     });
     return d;
   } catch (e) { return defaultDraft_(); }
@@ -1164,9 +1678,15 @@ function readFormDraft_(e, currentDraft) {
   const steps = [];
   for (let i = 0; i < count; i++) {
     const amount = parseInt(f['amount_' + i] || '0', 10);
+    const condition = readSelectionInput_(e, 'condition_' + i) ||
+      (currentDraft.steps[i] && currentDraft.steps[i].condition) || 'no_reply';
+    const absMs = getDateTimeInput_(e, 'sendAtAbs_' + i);
     steps.push({
       amount: isNaN(amount) ? 0 : amount,
       unit: (f['unit_' + i] || 'days').toLowerCase(),
+      atTime: resolveAtTime_(e, 'atTime_' + i),
+      sendAtAbs: (absMs && absMs > 0) ? Number(absMs) : 0,
+      condition: condition,
       message: (f['message_' + i] || '').trim(),
       cc: (f['cc_' + i] || '').trim(),
       bcc: (f['bcc_' + i] || '').trim()
@@ -1176,7 +1696,8 @@ function readFormDraft_(e, currentDraft) {
     steps: steps,
     recipients: (f.recipients || '').trim(),
     cc: (f.cc || '').trim(),
-    bcc: (f.bcc || '').trim()
+    bcc: (f.bcc || '').trim(),
+    campaignName: (f.campaignName || '').trim()
   };
 }
 
@@ -1193,15 +1714,75 @@ function getTemplate_(name) {
   try { return JSON.parse(raw); } catch (e) { return null; }
 }
 
-function setTemplateSteps_(name, steps) {
+function deleteTemplate_(name) {
+  PropertiesService.getUserProperties().deleteProperty(TEMPLATE_PREFIX + name);
+}
+
+// Templates (steps only) and sequences (steps + recipients) used to be two
+// separate lists. They're one concept now: move each template into the
+// sequence list, keeping both if the names collide. The template key is only
+// removed after its sequence copy is written.
+function migrateTemplatesToSequences_() {
+  const props = PropertiesService.getUserProperties();
+  listTemplates_().forEach(function (name) {
+    const tpl = getTemplate_(name);
+    if (!tpl || !Array.isArray(tpl.steps)) return; // leave unreadable data alone
+    let target = name;
+    for (let n = 1; props.getProperty(SEQUENCE_PREFIX + target); n++) {
+      target = name + (n === 1 ? ' (template)' : ' (template ' + n + ')');
+    }
+    props.setProperty(SEQUENCE_PREFIX + target, JSON.stringify({
+      steps: tpl.steps, recipients: '', cc: '', bcc: ''
+    }));
+    deleteTemplate_(name);
+  });
+}
+
+// Coerce a stored/submitted sequence step into the draft-step shape.
+function normalizeSeqStep_(s) {
+  s = s || {};
+  const amount = parseInt(s.amount, 10);
+  const unit = ['days', 'hours', 'minutes'].indexOf(s.unit) !== -1 ? s.unit : 'days';
+  const atTime = (typeof s.atTime === 'string' && parseHHMM_(s.atTime)) ? s.atTime : '';
+  const condition = STEP_CONDITIONS.some(function (c) { return c.value === s.condition; })
+    ? s.condition : 'no_reply';
+  return {
+    amount: amount > 0 ? amount : 3,
+    unit: unit,
+    atTime: atTime,
+    sendAtAbs: 0,
+    condition: condition,
+    message: String(s.message || ''),
+    cc: String(s.cc || ''),
+    bcc: String(s.bcc || '')
+  };
+}
+
+const SEQUENCE_PREFIX = 'seq_';
+
+function listSequences_() {
+  migrateTemplatesToSequences_();
+  return PropertiesService.getUserProperties().getKeys()
+    .filter(function (k) { return k.indexOf(SEQUENCE_PREFIX) === 0; })
+    .map(function (k) { return k.substring(SEQUENCE_PREFIX.length); })
+    .sort();
+}
+
+function getSequence_(name) {
+  const raw = PropertiesService.getUserProperties().getProperty(SEQUENCE_PREFIX + name);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (e) { return null; }
+}
+
+function setSequence_(name, bundle) {
   PropertiesService.getUserProperties().setProperty(
-    TEMPLATE_PREFIX + name,
-    JSON.stringify({ steps: steps })
+    SEQUENCE_PREFIX + name,
+    JSON.stringify(bundle)
   );
 }
 
-function deleteTemplate_(name) {
-  PropertiesService.getUserProperties().deleteProperty(TEMPLATE_PREFIX + name);
+function deleteSequence_(name) {
+  PropertiesService.getUserProperties().deleteProperty(SEQUENCE_PREFIX + name);
 }
 
 
@@ -1214,10 +1795,10 @@ function actionAddDraftStep(e) {
   if (draft.steps.length >= MAX_CAMPAIGN_STEPS) {
     return notify_('Max ' + MAX_CAMPAIGN_STEPS + ' steps.');
   }
-  draft.steps.push({ amount: 3, unit: 'days', message: '' });
+  draft.steps.push({ amount: 3, unit: 'days', atTime: '', sendAtAbs: 0, condition: 'no_reply', message: '', cc: '', bcc: '' });
   setDraft_(threadId, draft);
   return CardService.newActionResponseBuilder()
-    .setNavigation(CardService.newNavigation().updateCard(buildCard_(threadId)))
+    .setNavigation(CardService.newNavigation().updateCard(buildBuilderCard_(threadId)))
     .build();
 }
 
@@ -1228,10 +1809,12 @@ function actionRemoveDraftStep(e) {
   const draft = readFormDraft_(e, getDraft_(threadId));
   if (isNaN(idx) || idx < 0 || idx >= draft.steps.length) return notify_('Step not found.');
   draft.steps.splice(idx, 1);
-  if (draft.steps.length === 0) draft.steps.push({ amount: 3, unit: 'days', message: '' });
+  if (draft.steps.length === 0) {
+    draft.steps.push({ amount: 3, unit: 'days', atTime: '', sendAtAbs: 0, condition: 'no_reply', message: '', cc: '', bcc: '' });
+  }
   setDraft_(threadId, draft);
   return CardService.newActionResponseBuilder()
-    .setNavigation(CardService.newNavigation().updateCard(buildCard_(threadId)))
+    .setNavigation(CardService.newNavigation().updateCard(buildBuilderCard_(threadId)))
     .build();
 }
 
@@ -1241,7 +1824,7 @@ function actionClearDraft(e) {
   clearDraft_(threadId);
   return CardService.newActionResponseBuilder()
     .setNotification(CardService.newNotification().setText('Draft cleared.'))
-    .setNavigation(CardService.newNavigation().updateCard(buildCard_(threadId)))
+    .setNavigation(CardService.newNavigation().updateCard(buildBuilderCard_(threadId)))
     .build();
 }
 
@@ -1250,41 +1833,121 @@ function actionSaveCampaign(e) {
   if (!threadId) return notify_('Open a thread first.');
   const draft = readFormDraft_(e, getDraft_(threadId));
 
-  // Validate: each step must have a positive wait amount.
+  const formTz = ((e.formInput && e.formInput.campaignTz) || '').trim();
+  const tz = formTz || getPreferredTz_();
+  if (formTz) setPreferredTz_(formTz);
+
+  // Validate: each step either has an absolute date in the future, or a positive
+  // wait amount with a parseable optional atTime.
   for (let i = 0; i < draft.steps.length; i++) {
     const s = draft.steps[i];
+    if (s.sendAtAbs && s.sendAtAbs > 0) {
+      const wall = Utilities.formatDate(new Date(s.sendAtAbs), 'UTC', 'yyyy-MM-dd HH:mm');
+      const ms = Utilities.parseDate(wall, tz, 'yyyy-MM-dd HH:mm').getTime();
+      if (ms <= Date.now()) {
+        // Drop the stale picker value from the persisted draft — the picker has
+        // no "clear" affordance, so leaving it would block every future save.
+        s.sendAtAbs = 0;
+        setDraft_(threadId, draft);
+        return CardService.newActionResponseBuilder()
+          .setNotification(CardService.newNotification().setText(
+            'Step ' + (i + 1) + ': specific date/time must be in the future.'
+          ))
+          .setNavigation(CardService.newNavigation().updateCard(buildBuilderCard_(threadId)))
+          .build();
+      }
+      continue;
+    }
     if (!s.amount || s.amount <= 0) {
       // Persist current edits before returning so user doesn't lose them.
       setDraft_(threadId, draft);
       return CardService.newActionResponseBuilder()
         .setNotification(CardService.newNotification().setText(
-          'Step ' + (i + 1) + ': enter a wait amount greater than 0.'
+          'Step ' + (i + 1) + ': enter a wait amount greater than 0, or pick a specific date/time.'
         ))
-        .setNavigation(CardService.newNavigation().updateCard(buildCard_(threadId)))
+        .setNavigation(CardService.newNavigation().updateCard(buildBuilderCard_(threadId)))
+        .build();
+    }
+    if (s.atTime && !parseHHMM_(s.atTime)) {
+      setDraft_(threadId, draft);
+      return CardService.newActionResponseBuilder()
+        .setNotification(CardService.newNotification().setText(
+          'Step ' + (i + 1) + ': "At time" must be HH:MM (e.g. 09:00).'
+        ))
+        .setNavigation(CardService.newNavigation().updateCard(buildBuilderCard_(threadId)))
         .build();
     }
   }
 
-  // Compute cumulative offsets — each step waits after the previous step's send.
-  const tz = getPreferredTz_();
+  const armed = armThreadWithSteps_(threadId, draft.steps, {
+    tz: tz,
+    campaignName: draft.campaignName,
+    recipients: draft.recipients,
+    cc: draft.cc,
+    bcc: draft.bcc
+  });
+  const newSteps = armed.steps;
+  const campaignName = armed.campaignName;
+
+  clearDraft_(threadId);
+
+  // A saved campaign is worthless without a scheduler to fire it. Say so in the
+  // confirmation rather than reporting success for something that won't send.
+  const scheduler = ensureSchedulerQuiet_();
+
+  return CardService.newActionResponseBuilder()
+    .setNotification(CardService.newNotification().setText(
+      scheduler.ok
+        ? (campaignName ? '"' + campaignName + '" — ' : '') +
+          'saved ' + newSteps.length + '-step campaign. Last step fires ' +
+          formatLocal_(newSteps[newSteps.length - 1].sendAt, tz)
+        : 'Saved, but the scheduler is NOT running — nothing will send. ' +
+          'Open the Campaigns dashboard and tap "Fix scheduler".'
+    ))
+    .setNavigation(CardService.newNavigation().popCard().updateCard(buildCard_(threadId)))
+    .build();
+}
+
+// Schedule a list of draft-shaped steps ({amount, unit, atTime, sendAtAbs,
+// condition, message, cc, bcc}) on a thread: computes each send time relative
+// to the previous step, appends to anything already queued, and tags FU/Custom.
+// Shared by the sidebar builder, one-click sequence start, and the Studio.
+// opts: { tz, campaignName, recipients, cc, bcc, anchorMs }
+function armThreadWithSteps_(threadId, steps, opts) {
+  opts = opts || {};
+  const tz = opts.tz || getPreferredTz_();
+  const thread = GmailApp.getThreadById(threadId);
+  if (!thread) throw new Error('Thread not found: ' + threadId);
+
+  // Campaign name: explicit > auto-derived from a Gmail label > none.
+  let campaignName = (opts.campaignName || '').trim();
+  if (!campaignName) campaignName = autoGenerateCampaignName_(thread);
+
+  // atTime (if set) is authoritative wall-clock; unit just controls the date
+  // floor relative to the previous step.
   const now = Date.now();
-  const recipientsField = (draft.recipients || '').trim();
-  const campaignCc = (draft.cc || '').trim();
-  const campaignBcc = (draft.bcc || '').trim();
-  let cumulative = 0;
-  const newSteps = draft.steps.map(function (s) {
-    let mult;
-    if (s.unit === 'minutes') mult = 60 * 1000;
-    else if (s.unit === 'hours') mult = 60 * 60 * 1000;
-    else mult = 24 * 60 * 60 * 1000;
-    cumulative += s.amount * mult;
+  const recipientsField = (opts.recipients || '').trim();
+  const campaignCc = (opts.cc || '').trim();
+  const campaignBcc = (opts.bcc || '').trim();
+  let prevMs = opts.anchorMs || now;
+  const newSteps = steps.map(function (s) {
+    let sendAt;
+    if (s.sendAtAbs && s.sendAtAbs > 0) {
+      // Re-anchor the picker's UTC wall-clock to the campaign tz, same as one-offs.
+      const wall = Utilities.formatDate(new Date(s.sendAtAbs), 'UTC', 'yyyy-MM-dd HH:mm');
+      sendAt = Utilities.parseDate(wall, tz, 'yyyy-MM-dd HH:mm').getTime();
+    } else {
+      sendAt = computeStepSendAt_(prevMs, s.amount, s.unit, s.atTime, tz);
+    }
+    prevMs = sendAt;
     const stepCc = mergeRecipients_(campaignCc, s.cc || '');
     const stepBcc = mergeRecipients_(campaignBcc, s.bcc || '');
     const obj = {
-      sendAt: now + cumulative,
+      sendAt: sendAt,
       message: s.message,
       tz: tz,
-      createdAt: now
+      createdAt: now,
+      condition: s.condition || 'no_reply'
     };
     if (recipientsField) obj.to = recipientsField;
     if (stepCc) obj.cc = stepCc;
@@ -1295,7 +1958,7 @@ function actionSaveCampaign(e) {
   // Append to existing scheduled queue (one-offs and prior campaigns coexist).
   const props = PropertiesService.getUserProperties();
   const key = 'custom_' + threadId;
-  let existing = { steps: [] };
+  const existing = { steps: [] };
   const raw = props.getProperty(key);
   if (raw) {
     try {
@@ -1304,27 +1967,21 @@ function actionSaveCampaign(e) {
       else if (parsed && parsed.sendAt) {
         existing.steps = [{ sendAt: parsed.sendAt, message: parsed.message || '' }];
       }
+      if (parsed && parsed.campaignName && !campaignName) {
+        campaignName = parsed.campaignName;
+      }
     } catch (e2) {}
   }
   existing.steps = existing.steps.concat(newSteps);
   existing.steps.sort(function (a, b) { return a.sendAt - b.sendAt; });
+  if (campaignName) existing.campaignName = campaignName;
   props.setProperty(key, JSON.stringify(existing));
 
-  // Tag thread with FU/Custom.
-  const thread = GmailApp.getThreadById(threadId);
   clearOtherFollowUpLabels_(thread, CONFIG.labelPrefix + '/Custom');
   const customLabel = getOrCreateLabel_(CONFIG.labelPrefix + '/Custom');
   if (!hasLabel_(thread, customLabel.getName())) thread.addLabel(customLabel);
 
-  clearDraft_(threadId);
-
-  return CardService.newActionResponseBuilder()
-    .setNotification(CardService.newNotification().setText(
-      'Saved ' + newSteps.length + '-step campaign. Last step fires ' +
-      formatLocal_(newSteps[newSteps.length - 1].sendAt, tz)
-    ))
-    .setNavigation(CardService.newNavigation().updateCard(buildCard_(threadId)))
-    .build();
+  return { steps: newSteps, campaignName: campaignName, tz: tz };
 }
 
 function actionScheduleOneOff(e) {
@@ -1371,37 +2028,25 @@ function actionScheduleOneOff(e) {
   const customLabel = getOrCreateLabel_(CONFIG.labelPrefix + '/Custom');
   if (!hasLabel_(thread, customLabel.getName())) thread.addLabel(customLabel);
 
+  const scheduler = ensureSchedulerQuiet_();
+
   return CardService.newActionResponseBuilder()
     .setNotification(CardService.newNotification().setText(
-      'Added one-off — fires ' + formatLocal_(sendAt, tz)
+      scheduler.ok
+        ? 'Added one-off — fires ' + formatLocal_(sendAt, tz)
+        : 'Saved, but the scheduler is NOT running — nothing will send. ' +
+          'Open the Campaigns dashboard and tap "Fix scheduler".'
     ))
-    .setNavigation(CardService.newNavigation().updateCard(buildCard_(threadId)))
+    .setNavigation(CardService.newNavigation().popCard().updateCard(buildCard_(threadId)))
     .build();
 }
 
-function actionLoadTemplate(e) {
+function actionSaveSequence(e) {
   const threadId = e.parameters.threadId;
   if (!threadId) return notify_('Open a thread first.');
   const f = e.formInput || {};
-  const name = (f.templateName || '').trim();
-  if (!name) return notify_('Pick a template first.');
-  const tpl = getTemplate_(name);
-  if (!tpl || !Array.isArray(tpl.steps)) return notify_('Template "' + name + '" not found.');
-  setDraft_(threadId, { steps: tpl.steps.slice(0, MAX_CAMPAIGN_STEPS) });
-  return CardService.newActionResponseBuilder()
-    .setNotification(CardService.newNotification().setText(
-      'Loaded "' + name + '" (' + tpl.steps.length + ' step(s)).'
-    ))
-    .setNavigation(CardService.newNavigation().updateCard(buildCard_(threadId)))
-    .build();
-}
-
-function actionSaveTemplate(e) {
-  const threadId = e.parameters.threadId;
-  if (!threadId) return notify_('Open a thread first.');
-  const f = e.formInput || {};
-  const name = (f.newTemplateName || '').trim();
-  if (!name) return notify_('Enter a template name first.');
+  const name = (f.newSequenceName || '').trim();
+  if (!name) return notify_('Enter a sequence name first.');
   const draft = readFormDraft_(e, getDraft_(threadId));
   for (let i = 0; i < draft.steps.length; i++) {
     if (!draft.steps[i].amount || draft.steps[i].amount <= 0) {
@@ -1410,30 +2055,68 @@ function actionSaveTemplate(e) {
         .setNotification(CardService.newNotification().setText(
           'Step ' + (i + 1) + ': set a wait > 0 before saving.'
         ))
-        .setNavigation(CardService.newNavigation().updateCard(buildCard_(threadId)))
+        .setNavigation(CardService.newNavigation().updateCard(buildBuilderCard_(threadId)))
         .build();
     }
   }
-  setTemplateSteps_(name, draft.steps);
+  setSequence_(name, {
+    steps: draft.steps,
+    recipients: draft.recipients || '',
+    cc: draft.cc || '',
+    bcc: draft.bcc || ''
+  });
   setDraft_(threadId, draft);
+  Logger.log('actionSaveSequence: saved "' + name + '" (' + draft.steps.length +
+             ' step(s), recipients="' + (draft.recipients || '') + '"). ' +
+             'All sequences: ' + JSON.stringify(listSequences_()));
   return CardService.newActionResponseBuilder()
     .setNotification(CardService.newNotification().setText(
-      'Saved template "' + name + '" (' + draft.steps.length + ' step(s)).'
+      'Saved sequence "' + name + '" (' + draft.steps.length + ' step(s)' +
+      (draft.recipients ? ', recipients included' : '') + ').'
     ))
-    .setNavigation(CardService.newNavigation().updateCard(buildCard_(threadId)))
+    .setNavigation(CardService.newNavigation().updateCard(buildBuilderCard_(threadId)))
     .build();
 }
 
-function actionDeleteTemplate(e) {
+function actionLoadSequence(e) {
   const threadId = e.parameters.threadId;
   if (!threadId) return notify_('Open a thread first.');
-  const f = e.formInput || {};
-  const name = (f.templateName || '').trim();
-  if (!name) return notify_('Pick a template first.');
-  deleteTemplate_(name);
+  const name = readSelectionInput_(e, 'sequenceName');
+  Logger.log('actionLoadSequence: name="' + name + '"');
+  if (!name) return notify_('Pick a sequence first.');
+  const seq = getSequence_(name);
+  if (!seq || !Array.isArray(seq.steps) || seq.steps.length === 0) {
+    return notify_('Sequence "' + name + '" not found or empty.');
+  }
+  const cleanSteps = seq.steps.slice(0, MAX_CAMPAIGN_STEPS).map(normalizeSeqStep_);
+  const existingDraft = getDraft_(threadId);
+  setDraft_(threadId, {
+    steps: cleanSteps,
+    recipients: seq.recipients || '',
+    cc: seq.cc || '',
+    bcc: seq.bcc || '',
+    campaignName: existingDraft.campaignName || ''
+  });
+  Logger.log('actionLoadSequence: applied ' + cleanSteps.length + ' step(s), recipients="' + (seq.recipients || '') + '"');
   return CardService.newActionResponseBuilder()
-    .setNotification(CardService.newNotification().setText('Deleted template "' + name + '".'))
-    .setNavigation(CardService.newNavigation().updateCard(buildCard_(threadId)))
+    .setNotification(CardService.newNotification().setText(
+      'Applied "' + name + '" (' + cleanSteps.length + ' step(s)' +
+      (seq.recipients ? ', recipients filled' : '') + '). Review and Save campaign.'
+    ))
+    .setNavigation(CardService.newNavigation().updateCard(buildBuilderCard_(threadId)))
+    .build();
+}
+
+function actionDeleteSequence(e) {
+  const threadId = e.parameters.threadId;
+  if (!threadId) return notify_('Open a thread first.');
+  const name = readSelectionInput_(e, 'sequenceName');
+  if (!name) return notify_('Pick a sequence first.');
+  deleteSequence_(name);
+  Logger.log('actionDeleteSequence: deleted "' + name + '"');
+  return CardService.newActionResponseBuilder()
+    .setNotification(CardService.newNotification().setText('Deleted sequence "' + name + '".'))
+    .setNavigation(CardService.newNavigation().updateCard(buildBuilderCard_(threadId)))
     .build();
 }
 
@@ -1463,6 +2146,10 @@ function getPreferredTz_() {
     const v = PropertiesService.getUserProperties().getProperty(TZ_PREF_KEY);
     if (v) return v;
   } catch (err) {}
+  try {
+    const scriptTz = Session.getScriptTimeZone();
+    if (scriptTz) return scriptTz;
+  } catch (err) {}
   return DEFAULT_TZ;
 }
 
@@ -1471,11 +2158,11 @@ function setPreferredTz_(tz) {
   try { PropertiesService.getUserProperties().setProperty(TZ_PREF_KEY, tz); } catch (err) {}
 }
 
-function buildTimezoneDropdown_() {
+function buildTimezoneDropdown_(fieldName) {
   const preferred = getPreferredTz_();
   const input = CardService.newSelectionInput()
     .setType(CardService.SelectionInputType.DROPDOWN)
-    .setFieldName('tz')
+    .setFieldName(fieldName || 'tz')
     .setTitle('Timezone');
   let matched = false;
   TIMEZONE_CHOICES.forEach(function (tz) {
@@ -1491,6 +2178,221 @@ function buildTimezoneDropdown_() {
   }
   return input;
 }
+
+// ───────── At-time dropdown ────────────────────────────────────────
+//
+// Hourly options spanning the day. Dropdown instead of free typing so users can
+// click a value (previously a wall-clock text entry that was easy to mistype).
+// Half-hour granularity is enough for cadence work; fold to "no specific time"
+// for the default (exact offset from previous step).
+
+const AT_TIME_OPTIONS = [
+  { label: 'No specific time', value: '' },
+  { label: '12:00 AM', value: '00:00' },
+  { label: '1:00 AM',  value: '01:00' },
+  { label: '2:00 AM',  value: '02:00' },
+  { label: '3:00 AM',  value: '03:00' },
+  { label: '4:00 AM',  value: '04:00' },
+  { label: '5:00 AM',  value: '05:00' },
+  { label: '6:00 AM',  value: '06:00' },
+  { label: '7:00 AM',  value: '07:00' },
+  { label: '8:00 AM',  value: '08:00' },
+  { label: '9:00 AM',  value: '09:00' },
+  { label: '9:30 AM',  value: '09:30' },
+  { label: '10:00 AM', value: '10:00' },
+  { label: '10:30 AM', value: '10:30' },
+  { label: '11:00 AM', value: '11:00' },
+  { label: '11:30 AM', value: '11:30' },
+  { label: '12:00 PM', value: '12:00' },
+  { label: '12:30 PM', value: '12:30' },
+  { label: '1:00 PM',  value: '13:00' },
+  { label: '1:30 PM',  value: '13:30' },
+  { label: '2:00 PM',  value: '14:00' },
+  { label: '2:30 PM',  value: '14:30' },
+  { label: '3:00 PM',  value: '15:00' },
+  { label: '3:30 PM',  value: '15:30' },
+  { label: '4:00 PM',  value: '16:00' },
+  { label: '4:30 PM',  value: '16:30' },
+  { label: '5:00 PM',  value: '17:00' },
+  { label: '5:30 PM',  value: '17:30' },
+  { label: '6:00 PM',  value: '18:00' },
+  { label: '7:00 PM',  value: '19:00' },
+  { label: '8:00 PM',  value: '20:00' },
+  { label: '9:00 PM',  value: '21:00' },
+  { label: '10:00 PM', value: '22:00' },
+  { label: '11:00 PM', value: '23:00' }
+];
+
+// Single dropdown for the "At time" control. CardService doesn't allow custom
+// HTML or expose a TIME_ONLY picker in this runtime, so a plain SelectionInput
+// is the cleanest UX available. Read back via resolveAtTime_.
+function buildAtTimeFields_(fieldName, currentValue) {
+  const cur = (currentValue || '').trim();
+  const input = CardService.newSelectionInput()
+    .setType(CardService.SelectionInputType.DROPDOWN)
+    .setFieldName(fieldName)
+    .setTitle('At time (optional)');
+  let matched = false;
+  AT_TIME_OPTIONS.forEach(function (opt) {
+    const isSel = opt.value === cur;
+    if (isSel) matched = true;
+    input.addItem(opt.label, opt.value, isSel);
+  });
+  if (!matched && cur && parseHHMM_(cur)) input.addItem(cur, cur, true);
+  return [input];
+}
+
+function resolveAtTime_(e, fieldName) {
+  return readSelectionInput_(e, fieldName);
+}
+
+
+// ───────── Per-step send conditions ────────────────────────────────
+//
+// Each step carries a condition that decides whether the step actually sends
+// when its sendAt fires. 'no_reply' preserves the original behavior (cancel
+// the whole campaign if the recipient has replied). 'replied' inverts that.
+// Open/click conditions are listed so the UI matches the user's mental model,
+// but we don't ship open/click tracking yet — they fall back to always-send.
+
+const STEP_CONDITIONS = [
+  { label: 'If no reply (default)', value: 'no_reply' },
+  { label: 'If replied',            value: 'replied'  },
+  { label: 'No matter what',        value: 'always'   }
+];
+
+// How long a due "If replied" step waits for a reply before being dropped.
+const REPLIED_WAIT_MAX_MS = 14 * 24 * 60 * 60 * 1000;
+
+function buildConditionDropdown_(fieldName, currentValue) {
+  const input = CardService.newSelectionInput()
+    .setType(CardService.SelectionInputType.DROPDOWN)
+    .setFieldName(fieldName)
+    .setTitle('Send this step');
+  const cur = currentValue || 'no_reply';
+  STEP_CONDITIONS.forEach(function (opt) {
+    input.addItem(opt.label, opt.value, opt.value === cur);
+  });
+  return input;
+}
+
+// Decide what to do for a step given its condition and the current reply state.
+// Returns one of: 'send', 'defer', 'cancel'.
+//   - send:   send the step now
+//   - defer:  hold the step (keep waiting for a reply) without blocking later steps
+//   - cancel: drop the whole campaign on this thread
+function evaluateStepCondition_(condition, hasReply) {
+  switch (condition) {
+    case 'replied':
+      return hasReply ? 'send' : 'defer';
+    case 'always':
+      return 'send';
+    case 'no_reply':
+    default:
+      return hasReply ? 'cancel' : 'send';
+  }
+}
+
+// True if a reply has arrived that should count against this step.
+// Explicit-recipient mode: any message from a listed recipient after the
+// step was scheduled. Thread mode: any non-self message after my last outbound.
+function stepHasReply_(messages, step, myEmails, myLastIdx) {
+  if (step && step.to) {
+    const targets = parseAddressList_(step.to)
+      .map(function (a) { return a.email.toLowerCase(); })
+      .filter(function (e) { return e.length > 0; });
+    const sinceMs = step.createdAt || 0;
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      if (m.getDate().getTime() <= sinceMs) continue;
+      const fromEmail = parseAddress_(m.getFrom()).email.toLowerCase();
+      if (fromEmail && targets.indexOf(fromEmail) !== -1) return true;
+    }
+    return false;
+  }
+  if (myLastIdx === -1) return false;
+  for (let i = myLastIdx + 1; i < messages.length; i++) {
+    if (!isFromMe_(messages[i], myEmails)) return true;
+  }
+  return false;
+}
+
+
+// ───────── Campaign auto-naming from Gmail labels ──────────────────
+
+// First user label on a thread that isn't one of ours (FU/*) and isn't a
+// built-in system label. Used to auto-name a campaign after the topic label
+// the user already organizes inboxes by.
+function getThreadCampaignLabel_(thread) {
+  if (!thread) return '';
+  let labels = [];
+  try { labels = thread.getLabels(); } catch (e) { return ''; }
+  for (let i = 0; i < labels.length; i++) {
+    const name = labels[i].getName();
+    if (!name) continue;
+    if (name.indexOf(CONFIG.labelPrefix + '/') === 0) continue;
+    return name;
+  }
+  return '';
+}
+
+// Next sequential number for a "<Label> Active Campaign N" name, scanning
+// every stored campaign across the user's properties.
+function nextCampaignNumberForLabel_(labelName) {
+  const props = PropertiesService.getUserProperties();
+  const keys = props.getKeys().filter(function (k) { return k.indexOf('custom_') === 0; });
+  const prefix = labelName + ' Active Campaign ';
+  let max = 0;
+  keys.forEach(function (k) {
+    const raw = props.getProperty(k);
+    if (!raw) return;
+    let data;
+    try { data = JSON.parse(raw); } catch (e) { return; }
+    if (!data || !data.campaignName) return;
+    if (data.campaignName.indexOf(prefix) !== 0) return;
+    const tail = data.campaignName.substring(prefix.length).trim();
+    const n = parseInt(tail, 10);
+    if (!isNaN(n) && n > max) max = n;
+  });
+  return max + 1;
+}
+
+function autoGenerateCampaignName_(thread) {
+  const label = getThreadCampaignLabel_(thread);
+  if (!label) return '';
+  return label + ' Active Campaign ' + nextCampaignNumberForLabel_(label);
+}
+
+
+// ───────── Signature ──────────────────────────────────────────────
+//
+// Single global signature appended to every follow-up the tool sends.
+// Stored per-user via UserProperties so each Google account has its own.
+
+const SIGNATURE_KEY = 'signature';
+
+function getSignature_() {
+  try {
+    return PropertiesService.getUserProperties().getProperty(SIGNATURE_KEY) || '';
+  } catch (e) { return ''; }
+}
+
+function setSignature_(text) {
+  const props = PropertiesService.getUserProperties();
+  if (text) props.setProperty(SIGNATURE_KEY, text);
+  else props.deleteProperty(SIGNATURE_KEY);
+}
+
+// Append the saved signature to a message body, separated by a blank line.
+// Idempotent-ish: if the body already ends with the exact signature, no double-append.
+function applySignatureToBody_(body) {
+  const sig = getSignature_();
+  if (!sig) return body || '';
+  const trimmed = (body || '').replace(/\s+$/, '');
+  if (trimmed.length >= sig.length && trimmed.slice(-sig.length) === sig) return trimmed;
+  return (trimmed ? trimmed + '\n\n' : '') + sig;
+}
+
 
 function getUserTimezone_(e) {
   try {
@@ -1521,46 +2423,40 @@ function actionRemoveStep(e) {
   const threadId = e.parameters.threadId;
   const index = parseInt(e.parameters.index, 10);
   if (!threadId) return notify_('No thread.');
-  const props = PropertiesService.getUserProperties();
-  const key = 'custom_' + threadId;
-  const raw = props.getProperty(key);
-  if (!raw) return notify_('Nothing scheduled.');
-  let data;
-  try { data = JSON.parse(raw); } catch (err) { return notify_('Could not read schedule.'); }
-  if (data.sendAt && !data.steps) {
-    data = { steps: [{ sendAt: data.sendAt, message: data.message || '' }] };
-  }
-  if (!data.steps) data.steps = [];
-  data.steps.sort(function (a, b) { return a.sendAt - b.sendAt; });
-  if (isNaN(index) || index < 0 || index >= data.steps.length) {
-    return notify_('Step not found.');
-  }
-  data.steps.splice(index, 1);
-
-  if (data.steps.length === 0) {
-    props.deleteProperty(key);
-    const thread = GmailApp.getThreadById(threadId);
-    const customLabel = GmailApp.getUserLabelByName(CONFIG.labelPrefix + '/Custom');
-    if (customLabel) thread.removeLabel(customLabel);
-  } else {
-    props.setProperty(key, JSON.stringify(data));
-  }
+  const err = removeQueuedStep_(threadId, index);
+  if (err) return notify_(err);
   return CardService.newActionResponseBuilder()
     .setNotification(CardService.newNotification().setText('Removed.'))
     .setNavigation(CardService.newNavigation().updateCard(buildCard_(threadId)))
     .build();
 }
 
-function actionCancel(e) {
-  const threadId = e.parameters.threadId;
-  if (!threadId) return notify_('No thread.');
-  const thread = GmailApp.getThreadById(threadId);
-  clearFollowUpLabels_(thread);
-  PropertiesService.getUserProperties().deleteProperty('custom_' + threadId);
-  return CardService.newActionResponseBuilder()
-    .setNotification(CardService.newNotification().setText('Cancelled all follow-ups on this thread.'))
-    .setNavigation(CardService.newNavigation().updateCard(buildCard_(threadId)))
-    .build();
+// Drop one queued step (index into the time-sorted queue). Clears the label
+// when nothing is left. Returns an error message, or '' on success.
+function removeQueuedStep_(threadId, index) {
+  const props = PropertiesService.getUserProperties();
+  const key = 'custom_' + threadId;
+  const raw = props.getProperty(key);
+  if (!raw) return 'Nothing scheduled.';
+  let data;
+  try { data = JSON.parse(raw); } catch (err) { return 'Could not read schedule.'; }
+  if (data.sendAt && !data.steps) {
+    data = { steps: [{ sendAt: data.sendAt, message: data.message || '' }] };
+  }
+  if (!data.steps) data.steps = [];
+  data.steps.sort(function (a, b) { return a.sendAt - b.sendAt; });
+  if (isNaN(index) || index < 0 || index >= data.steps.length) return 'Step not found.';
+  data.steps.splice(index, 1);
+
+  if (data.steps.length === 0) {
+    props.deleteProperty(key);
+    const thread = GmailApp.getThreadById(threadId);
+    const customLabel = GmailApp.getUserLabelByName(CONFIG.labelPrefix + '/Custom');
+    if (thread && customLabel) thread.removeLabel(customLabel);
+  } else {
+    props.setProperty(key, JSON.stringify(data));
+  }
+  return '';
 }
 
 function actionInsertSequence(e) {
@@ -1607,7 +2503,7 @@ function actionInsertSequence(e) {
     .setNotification(CardService.newNotification().setText(
       'Added ' + dayOffsets.length + '-step sequence (' + preset + ' days).'
     ))
-    .setNavigation(CardService.newNavigation().updateCard(buildCard_(threadId)))
+    .setNavigation(CardService.newNavigation().popCard().updateCard(buildCard_(threadId)))
     .build();
 }
 
@@ -1635,7 +2531,7 @@ function getThreadContext_(threadId) {
     const thread = GmailApp.getThreadById(threadId);
     if (!thread) return null;
     const messages = thread.getMessages();
-    const myEmails = CONFIG.senderEmails.map(function (e) { return e.toLowerCase(); });
+    const myEmails = getMyEmails_();
     let lastInbound = null;
     for (let i = messages.length - 1; i >= 0; i--) {
       if (!isFromMe_(messages[i], myEmails)) { lastInbound = messages[i]; break; }
@@ -1707,42 +2603,44 @@ function diagnose() {
   const log = [];
   log.push('=== Follow-Up Tool diagnostic ===');
 
-  // 1. Active account.
-  let activeEmail = '';
-  try { activeEmail = Session.getActiveUser().getEmail(); } catch (e) {}
-  log.push('Active account: ' + (activeEmail || '(unknown)'));
-  log.push('Configured senderEmails: ' + JSON.stringify(CONFIG.senderEmails));
-  if (activeEmail) {
-    const matches = CONFIG.senderEmails.some(function (s) {
-      return s.toLowerCase() === activeEmail.toLowerCase();
-    });
-    if (matches) {
-      log.push('  ✓ Active account is in senderEmails.');
-    } else {
-      log.push('  ✗ MISMATCH: active account is NOT in senderEmails. Add "' +
-        activeEmail + '" to CONFIG.senderEmails or schedules will silently clear.');
-    }
-  }
+  // 1. Identity of the account this execution belongs to.
+  log.push('Running as: ' + (getRunningEmail_() || '(unknown)'));
+  log.push('Owner account (CONFIG applies): ' + (isOwnerAccount_() ? 'yes' : 'no — using auto-detected identity'));
+  log.push('From: header will be: ' + (resolveFromHeader_() || '(Gmail default)'));
+  log.push('{senderFirstName} renders as: ' + getSenderFirstName_());
+  log.push('Effective "me" addresses: ' + JSON.stringify(getMyEmails_()));
 
   // 2. Trigger.
-  const triggers = ScriptApp.getProjectTriggers().filter(function (t) {
-    return t.getHandlerFunction() === 'processFollowUps';
-  });
+  const triggers = schedulerTriggers_();
   if (triggers.length === 0) {
-    log.push('✗ No processFollowUps trigger installed. Run setup() once.');
+    log.push('✗ No processFollowUps trigger in THIS account — nothing will ever send.');
+    const installErr = getSchedulerError_();
+    if (installErr) log.push('  last auto-install attempt failed: ' + installErr.message);
+    log.push('  Fix: open the add-on sidebar (it self-installs), or run setup() here.');
   } else {
-    log.push('✓ ' + triggers.length + ' processFollowUps trigger(s) installed.');
+    log.push('✓ ' + triggers.length + ' processFollowUps trigger(s), every ' +
+      normalizeInterval_(CONFIG.triggerIntervalMinutes) + ' min.');
+  }
+
+  // 2b. Last run.
+  const lastRun = getLastRunSummary_();
+  if (!lastRun) {
+    log.push('✗ No scheduler run has ever completed in this account.');
+  } else {
+    log.push('Last run: ' + Utilities.formatDate(new Date(lastRun.at), getPreferredTz_(), 'MMM d HH:mm z') +
+      ' — sent ' + lastRun.sent + ', ' + ((lastRun.errors || []).length) + ' error(s).');
+    (lastRun.errors || []).forEach(function (err) { log.push('  ! ' + err); });
   }
 
   // 3. FU/Custom label and tagged threads.
   const customLabel = GmailApp.getUserLabelByName(CONFIG.labelPrefix + '/Custom');
   if (!customLabel) {
-    log.push('✗ FU/Custom label missing. Run setup().');
+    log.push('✗ FU/Custom label missing in this account.');
   } else {
     const threads = customLabel.getThreads();
     log.push('FU/Custom: ' + threads.length + ' thread(s) tagged.');
     const props = PropertiesService.getUserProperties();
-    const myEmails = CONFIG.senderEmails.map(function (s) { return s.toLowerCase(); });
+    const myEmails = getMyEmails_();
     threads.forEach(function (thread) {
       const subj = thread.getFirstMessageSubject();
       const id = thread.getId();
