@@ -200,6 +200,12 @@ function setSenderIdentity_(displayName, firstName) {
 
 function processFollowUps() {
   Logger.log('processFollowUps build=custom-only');
+  // Self-repair from the trigger itself, so accounts with an outdated trigger
+  // are fixed without anyone opening the sidebar.
+  if (PropertiesService.getUserProperties().getProperty(SCHEDULER_INTERVAL_KEY) !==
+      String(normalizeInterval_(CONFIG.triggerIntervalMinutes))) {
+    ensureSchedulerQuiet_();
+  }
   if (CONFIG.businessHoursOnly && !isBusinessHours_()) {
     Logger.log('Outside business hours — skipping run.');
     return;
@@ -773,17 +779,26 @@ function ensureScheduler_() {
     existing = existing.slice(0, 1);
   }
 
-  if (existing.length === 1) {
+  // A trigger's interval can't be read back, so remember the one we created
+  // it with. Triggers from older versions (some ran every minute and burned
+  // the daily quota) have no record and get rebuilt at the configured interval.
+  const props = PropertiesService.getUserProperties();
+  const want = String(normalizeInterval_(CONFIG.triggerIntervalMinutes));
+  if (existing.length === 1 && props.getProperty(SCHEDULER_INTERVAL_KEY) === want) {
     result.ok = true;
     clearSchedulerError_();
     return result;
   }
+  existing.forEach(function (t) {
+    try { ScriptApp.deleteTrigger(t); } catch (e) {}
+  });
 
   try {
     ScriptApp.newTrigger('processFollowUps')
       .timeBased()
-      .everyMinutes(normalizeInterval_(CONFIG.triggerIntervalMinutes))
+      .everyMinutes(Number(want))
       .create();
+    props.setProperty(SCHEDULER_INTERVAL_KEY, want);
     result.ok = true;
     result.installed = true;
     clearSchedulerError_();
@@ -795,6 +810,8 @@ function ensureScheduler_() {
   }
   return result;
 }
+
+const SCHEDULER_INTERVAL_KEY = 'schedulerIntervalMinutes';
 
 // Apps Script only accepts 1, 5, 10, 15 or 30 for everyMinutes().
 function normalizeInterval_(mins) {

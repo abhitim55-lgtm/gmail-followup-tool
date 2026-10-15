@@ -73,6 +73,7 @@ function makeEnv() {
     },
     ScriptApp: {
       getProjectTriggers: () => [{ getHandlerFunction: () => 'processFollowUps' }],
+      deleteTrigger: () => {},
       getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/WRONG/exec' }),
       newTrigger: () => { throw new Error('no'); }
     },
@@ -396,6 +397,19 @@ test('home shows getting-started only for a brand-new user', () => {
   E.userProps.seq_S = JSON.stringify({ steps: [{ amount: 2 }] });
   E.texts.length = 0; E.ctx.buildDashboardCard_();
   assert.ok(!E.texts.includes('Getting started'));
+});
+
+test('scheduler: old trigger with no interval record is rebuilt at 5 min, once', () => {
+  const E = makeEnv();
+  let triggers = [{ getHandlerFunction: () => 'processFollowUps', old: true }], created = [];
+  E.ctx.ScriptApp.getProjectTriggers = () => triggers;
+  E.ctx.ScriptApp.deleteTrigger = (t) => { triggers = triggers.filter(x => x !== t); };
+  E.ctx.ScriptApp.newTrigger = () => { const b = { timeBased: () => b, everyMinutes: (m) => { b.m = m; return b; },
+    create: () => { created.push(b.m); triggers.push({ getHandlerFunction: () => 'processFollowUps' }); } }; return b; };
+  E.ctx.processFollowUps();
+  assert.deepStrictEqual(created, [5]); assert.strictEqual(triggers.length, 1); assert.ok(!triggers[0].old);
+  E.ctx.processFollowUps(); E.ctx.ensureScheduler_();
+  assert.deepStrictEqual(created, [5], 'no rebuild once recorded');
 });
 
 console.log(`\n${pass} passed`);
