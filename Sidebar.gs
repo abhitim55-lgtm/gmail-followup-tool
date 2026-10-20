@@ -40,15 +40,57 @@ function screenFor_(e) {
   return from === 'settings' ? buildSettingsCard_() : buildDashboardCard_();
 }
 
+// ───────── Look & feel ───────────────────────────────────────────
+//
+// The sidebar mirrors the Follow-ups page (StudioPage.html): same name, same
+// Gmail blue, same Material icons and menu labels, same status line.
+
+const BRAND_BLUE = '#0b57d0';
+
+// A Material icon (same set as the Follow-ups page), in the page's blue.
+// Served as a PNG from Google's icon CDN: CardService's MaterialIcon renders
+// through an icon font that Gmail's add-on frame doesn't load, so it showed
+// the icon's name ("account_tree") instead of the icon. `legacy` is unused
+// now but documents the closest built-in icon.
+function icon_(name, legacy) {
+  return CardService.newIconImage()
+    .setIconUrl('https://www.gstatic.com/images/icons/material/system/2x/' + name + '_googblue_24dp.png');
+}
+
+// Filled button in the page's blue.
+function blueButton_(text) {
+  return CardService.newTextButton()
+    .setText(text)
+    .setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+    .setBackgroundColor(BRAND_BLUE);
+}
+
 function navRow_(title, subtitle, icon, fn, params) {
   const action = CardService.newAction().setFunctionName(fn);
   if (params) action.setParameters(params);
   return CardService.newDecoratedText()
-    .setText('<b>' + title + '</b>')
+    .setText(title)
     .setBottomLabel(subtitle)
     .setWrapText(true)
-    .setStartIcon(CardService.newIconImage().setIcon(icon))
+    .setStartIcon(icon)
     .setOnClickAction(action);
+}
+
+// "● Follow-ups are on · Checks every 5 min · last 2m ago", as on the page.
+function statusSection_() {
+  const running = schedulerTriggers_().length > 0;
+  const lastRun = getLastRunSummary_();
+  const interval = normalizeInterval_(CONFIG.triggerIntervalMinutes);
+  return CardService.newCardSection().addWidget(
+    CardService.newDecoratedText()
+      .setText(running ? '<font color="#146c2e">●</font> <b>Follow-ups are on</b>'
+        : '<font color="#b3261e">●</font> <b>Follow-ups are off</b>')
+      .setBottomLabel(running
+        ? 'Checks every ' + interval + ' min' + (lastRun ? ' · last ' + humanDelta_(Date.now() - lastRun.at) + ' ago' : '')
+        : 'Nothing will send. Open Settings and tap Fix scheduler.')
+      .setWrapText(true)
+      .setOnClickAction(CardService.newAction().setFunctionName('actionOpenSettings'))
+  );
 }
 
 function grey_(html) {
@@ -71,7 +113,7 @@ function buildDashboardCard_() {
   const items = collectCampaigns_();
   const account = getRunningEmail_();
   const card = CardService.newCardBuilder()
-    .setHeader(screenHeader_('Follow-ups', account ? 'Sending as ' + account : ''));
+    .setHeader(screenHeader_('Follow-ups', account || ''));
 
   const alert = buildHomeAlert_(items);
   if (alert) card.addSection(alert);
@@ -88,43 +130,41 @@ function buildDashboardCard_() {
           '<font color="#5f6368">Follow-ups reply on the same thread and stop by themselves the moment they reply. ' +
           'You always see a review screen before anything is sent.</font>'))
         .addWidget(CardService.newTextButton().setText('Write my first sequence')
-          .setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+          .setTextButtonStyle(CardService.TextButtonStyle.FILLED).setBackgroundColor(BRAND_BLUE)
           .setOnClickAction(CardService.newAction().setFunctionName('actionOpenSequenceEditor')
             .setParameters({ returnTo: 'list' })))
     );
   }
+  // Same menu, labels and icons as the Follow-ups page's right rail.
+  const studioUrl = getStudioUrl_();
   const menu = CardService.newCardSection();
-  menu.addWidget(navRow_('New campaign',
-    'Email new people. Follow-ups go out by themselves until they reply.',
-    CardService.Icon.EMAIL, 'actionOpenNewCampaign'));
-  menu.addWidget(navRow_('Follow up on a sent email',
+  menu.addWidget(navRow_('Follow up a sent email',
     'Pick an email you already sent and start follow-ups on it.',
-    CardService.Icon.INVITE, 'actionOpenSentThreads'));
+    icon_('forward_to_inbox', 'INVITE'), 'actionOpenSentThreads'));
   menu.addWidget(navRow_('Sequences',
     (seqCount ? seqCount + ' saved · ' : '') + 'Write your follow-ups once, reuse them anywhere.',
-    CardService.Icon.BOOKMARK, 'actionOpenSequences'));
-  const studioUrl = getStudioUrl_();
+    icon_('account_tree', 'BOOKMARK'), 'actionOpenSequences'));
+  menu.addWidget(navRow_('Settings',
+    'Your name, signature, timezone, and whether sending works.',
+    icon_('settings', 'DESCRIPTION'), 'actionOpenSettings'));
   if (studioUrl) {
     menu.addWidget(
       CardService.newDecoratedText()
-        .setText('<b>Open Follow-up Studio</b>')
-        .setBottomLabel('The full-page version: same campaigns and sequences, more room.')
+        .setText('Open the full page')
+        .setBottomLabel('Campaign reports, Autopilot and more room. Also under Follow-ups in Gmail\'s left menu.')
         .setWrapText(true)
-        .setStartIcon(CardService.newIconImage().setIcon(CardService.Icon.STAR))
+        .setStartIcon(icon_('open_in_new', 'STAR'))
         .setOpenLink(CardService.newOpenLink().setUrl(studioUrl))
     );
   }
-  menu.addWidget(navRow_('Settings',
-    'Your name, signature, timezone, and whether sending works.',
-    CardService.Icon.DESCRIPTION, 'actionOpenSettings'));
   card.addSection(menu);
 
   const queued = items.reduce(function (n, it) { return n + it.stepCount; }, 0);
   const list = CardService.newCardSection()
     .setHeader(items.length
-      ? 'Scheduled · ' + items.length + (items.length === 1 ? ' email thread' : ' email threads') +
-        ', ' + queued + (queued === 1 ? ' follow-up' : ' follow-ups')
-      : 'Scheduled');
+      ? 'Campaigns · ' + items.length + (items.length === 1 ? ' email' : ' emails') +
+        ', ' + queued + (queued === 1 ? ' follow-up' : ' follow-ups') + ' queued'
+      : 'Campaigns');
   if (items.length === 0) {
     list.addWidget(grey_('Nothing scheduled yet. Start a <b>New campaign</b>, or open ' +
       'any email you sent and tap <b>Start</b> on a sequence.'));
@@ -139,7 +179,7 @@ function buildDashboardCard_() {
         .setText(escapeHtml_(displayTitle))
         .setBottomLabel(escapeHtml_(formatLocal_(it.nextSendAt, it.tz) + (it.to ? ' → ' + it.to.substring(0, 50) : '')))
         .setWrapText(true)
-        .setStartIcon(CardService.newIconImage().setIcon(CardService.Icon.CLOCK))
+        .setStartIcon(icon_('schedule_send', 'CLOCK'))
         .setOnClickAction(
           CardService.newAction().setFunctionName('actionOpenThreadCard').setParameters({ threadId: it.threadId })
         )
@@ -160,19 +200,14 @@ function buildDashboardCard_() {
       .setOnClickAction(CardService.newAction().setFunctionName('actionRefreshDashboard'))
   );
   card.addSection(list);
+  card.addSection(statusSection_());
 
-  const footer = CardService.newFixedFooter().setPrimaryButton(
-    CardService.newTextButton()
-      .setText('New campaign')
-      .setOnClickAction(CardService.newAction().setFunctionName('actionOpenNewCampaign'))
+  card.setFixedFooter(
+    CardService.newFixedFooter().setPrimaryButton(
+      blueButton_('New campaign')
+        .setOnClickAction(CardService.newAction().setFunctionName('actionOpenNewCampaign'))
+    )
   );
-  if (studioUrl) {
-    footer.setSecondaryButton(
-      CardService.newTextButton().setText('Open Studio')
-        .setOpenLink(CardService.newOpenLink().setUrl(studioUrl))
-    );
-  }
-  card.setFixedFooter(footer);
   return card.build();
 }
 
@@ -185,7 +220,7 @@ function buildHomeAlert_(items) {
   if (!running) {
     text = '<font color="#d93025"><b>Sending is switched off.</b></font> Follow-ups won\'t go out until you fix it.';
     button = CardService.newTextButton().setText('Fix it')
-      .setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+      .setTextButtonStyle(CardService.TextButtonStyle.FILLED).setBackgroundColor(BRAND_BLUE)
       .setOnClickAction(CardService.newAction().setFunctionName('actionFixScheduler').setParameters({ from: 'home' }));
   } else if (lastRun && lastRun.errors && lastRun.errors.length) {
     text = '<font color="#d93025"><b>' + lastRun.errors.length + ' follow-up(s) failed</b></font> on the last check: ' +
@@ -321,7 +356,7 @@ function buildNewCampaignCard_() {
   card.setFixedFooter(
     CardService.newFixedFooter()
       .setPrimaryButton(
-        CardService.newTextButton().setText('Review & send')
+        CardService.newTextButton().setBackgroundColor(BRAND_BLUE).setText('Review & send')
           .setOnClickAction(CardService.newAction().setFunctionName('actionNcReview'))
       )
       .setSecondaryButton(
@@ -486,7 +521,7 @@ function buildNcReviewCard_(d) {
 
   card.setFixedFooter(
     CardService.newFixedFooter()
-      .setPrimaryButton(CardService.newTextButton()
+      .setPrimaryButton(CardService.newTextButton().setBackgroundColor(BRAND_BLUE)
         .setText('Send to ' + recips.length + (recips.length === 1 ? ' person' : ' people'))
         .setOnClickAction(CardService.newAction().setFunctionName('actionNcSend')))
       .setSecondaryButton(CardService.newTextButton().setText('Back to edit')
@@ -625,7 +660,7 @@ function buildSequencesCard_() {
   card.addSection(list);
   card.setFixedFooter(
     CardService.newFixedFooter().setPrimaryButton(
-      CardService.newTextButton().setText('New sequence')
+      CardService.newTextButton().setBackgroundColor(BRAND_BLUE).setText('New sequence')
         .setOnClickAction(CardService.newAction().setFunctionName('actionOpenSequenceEditor')
           .setParameters({ returnTo: 'list' }))
     )
@@ -734,7 +769,7 @@ function buildSequenceEditorCard_() {
 
   card.setFixedFooter(
     CardService.newFixedFooter().setPrimaryButton(
-      CardService.newTextButton().setText('Save sequence')
+      CardService.newTextButton().setBackgroundColor(BRAND_BLUE).setText('Save sequence')
         .setOnClickAction(CardService.newAction().setFunctionName('actionSeqSave'))
     )
   );
@@ -820,7 +855,7 @@ function buildConfirmCard_(title, text, confirmLabel, fn, params) {
     .addSection(CardService.newCardSection().addWidget(CardService.newTextParagraph().setText(escapeHtml_(text))))
     .setFixedFooter(
       CardService.newFixedFooter()
-        .setPrimaryButton(CardService.newTextButton().setText(confirmLabel)
+        .setPrimaryButton(CardService.newTextButton().setBackgroundColor(BRAND_BLUE).setText(confirmLabel)
           .setOnClickAction(CardService.newAction().setFunctionName(fn).setParameters(params)))
         .setSecondaryButton(CardService.newTextButton().setText('Keep it')
           .setOnClickAction(CardService.newAction().setFunctionName('actionPop')))
@@ -878,7 +913,7 @@ function buildSettingsCard_() {
   );
   you.addWidget(
     CardService.newTextButton().setText('Save')
-      .setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+      .setTextButtonStyle(CardService.TextButtonStyle.FILLED).setBackgroundColor(BRAND_BLUE)
       .setOnClickAction(CardService.newAction().setFunctionName('actionSaveSettings'))
   );
   card.addSection(you);

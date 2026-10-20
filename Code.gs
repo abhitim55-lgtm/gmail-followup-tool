@@ -1091,9 +1091,7 @@ function buildHealthSection_(items, from) {
         ? '<font color="#188038">Running</font> — checks every ' + interval + ' min'
         : '<font color="#d93025"><b>Not running — nothing will send</b></font>')
       .setWrapText(true)
-      .setStartIcon(CardService.newIconImage().setIcon(
-        running ? CardService.Icon.CLOCK : CardService.Icon.DESCRIPTION
-      ))
+      .setStartIcon(running ? icon_('check_circle', 'CLOCK') : icon_('error', 'DESCRIPTION'))
   );
 
   const account = getRunningEmail_();
@@ -1105,7 +1103,7 @@ function buildHealthSection_(items, from) {
         (displayName ? displayName + ' ' : '') + '<' + (account || 'unknown account') + '>'
       ))
       .setWrapText(true)
-      .setStartIcon(CardService.newIconImage().setIcon(CardService.Icon.EMAIL))
+      .setStartIcon(icon_('mail', 'EMAIL'))
   );
 
   if (!account) {
@@ -1276,7 +1274,7 @@ function buildCard_(threadId) {
         .setText(escapeHtml_(ctx.recipient.name || ctx.recipient.email))
         .setBottomLabel(escapeHtml_(ctx.recipient.name ? ctx.recipient.email : ''))
         .setWrapText(true)
-        .setStartIcon(CardService.newIconImage().setIcon(CardService.Icon.PERSON))
+        .setStartIcon(icon_('person', 'PERSON'))
     );
     card.addSection(who);
   }
@@ -1294,7 +1292,7 @@ function buildCard_(threadId) {
           .setTopLabel(when + (cond ? ' · ' + cond : ''))
           .setText(escapeHtml_((step.message || '(default bump message)').substring(0, 140)))
           .setWrapText(true)
-          .setStartIcon(CardService.newIconImage().setIcon(CardService.Icon.CLOCK))
+          .setStartIcon(icon_('schedule_send', 'CLOCK'))
           .setButton(
             CardService.newTextButton()
               .setText('Remove')
@@ -1337,14 +1335,15 @@ function buildCard_(threadId) {
       const first = (seq.steps[0] && seq.steps[0].message) || '';
       start.addWidget(
         CardService.newDecoratedText()
-          .setTopLabel(escapeHtml_(seq.name))
-          .setText(escapeHtml_(describeSequence_(seq.steps)))
-          .setBottomLabel(escapeHtml_(first.replace(/\s+/g, ' ').substring(0, 70)))
+          .setText('<b>' + escapeHtml_(seq.name) + '</b>')
+          .setBottomLabel(escapeHtml_(describeSequence_(seq.steps) +
+            (first ? ' · ' + first.replace(/\s+/g, ' ').substring(0, 60) : '')))
           .setWrapText(true)
+          .setStartIcon(icon_('account_tree', 'BOOKMARK'))
           .setButton(
             CardService.newTextButton()
               .setText('Start')
-              .setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+              .setTextButtonStyle(CardService.TextButtonStyle.FILLED).setBackgroundColor(BRAND_BLUE)
               .setOnClickAction(
                 CardService.newAction()
                   .setFunctionName('actionStartSequence')
@@ -1357,7 +1356,7 @@ function buildCard_(threadId) {
   card.addSection(start);
 
   const footer = CardService.newFixedFooter().setPrimaryButton(
-    CardService.newTextButton()
+    CardService.newTextButton().setBackgroundColor(BRAND_BLUE)
       .setText('Custom follow-up')
       .setOnClickAction(
         CardService.newAction()
@@ -1650,7 +1649,7 @@ function buildBuilderCard_(threadId) {
 
   card.setFixedFooter(
     CardService.newFixedFooter().setPrimaryButton(
-      CardService.newTextButton()
+      CardService.newTextButton().setBackgroundColor(BRAND_BLUE)
         .setText('Save & schedule')
         .setOnClickAction(
           CardService.newAction()

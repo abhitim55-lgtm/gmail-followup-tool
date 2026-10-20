@@ -217,7 +217,7 @@ test('sidebar: one-click Start, cards render, builder saves', () => {
   E.mkThread('th', 'Intro', [E.mkMessage({ from: ME, to: 'Pat <pat@co.io>' })]);
   E.userProps.seq_Bumps = JSON.stringify({ steps: [{ amount: 2, unit: 'days', message: 'a' }, { amount: 5, unit: 'days', message: 'b' }] });
   E.ctx.buildCard_('th');
-  assert.ok(E.texts.includes('Bumps') && E.texts.includes('New sequence'));
+  assert.ok(E.texts.includes('<b>Bumps</b>') && E.texts.includes('New sequence'));
   E.ctx.actionStartSequence({ parameters: { threadId: 'th', name: 'Bumps' } });
   const d = JSON.parse(E.userProps.custom_th);
   assert.strictEqual(d.steps.length, 2);
@@ -281,8 +281,9 @@ test('team status: teammate heartbeats visible to the owner only', () => {
 test('sidebar home: menu, Studio link, alert only when broken', () => {
   const E = makeEnv();
   E.ctx.buildDashboardCard_();
-  assert.ok(E.texts.includes('<b>New campaign</b>') && E.texts.includes('<b>Sequences</b>') && E.texts.includes('<b>Settings</b>'));
-  assert.ok(E.texts.includes('Open Studio'));
+  assert.ok(E.texts.includes('New campaign') && E.texts.includes('Sequences') && E.texts.includes('Settings') && E.texts.includes('Follow up a sent email'));
+  assert.ok(E.texts.some(t => /Follow-ups are on/.test(t)), 'status line like the page');
+  assert.ok(E.texts.includes('Open the full page'));
   assert.ok(!E.texts.includes('Fix it'));
   E.ctx.ScriptApp.getProjectTriggers = () => [];
   E.texts.length = 0; E.ctx.buildDashboardCard_();
