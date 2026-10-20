@@ -4,234 +4,352 @@
 <base target="_top">
 <meta charset="utf-8">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet">
 <style>
+  /* Gmail's own look (Material 3 tokens as Gmail uses them), so the page reads
+     as part of Gmail when the extension shows it in the main pane. */
   :root {
-    --nav-1: #1a2fd6; --nav-2: #0a0f5c;
-    --primary: #3478f6; --primary-dark: #1f5fd6; --primary-soft: #eaf2fe; --primary-line: #c9dcfb;
-    --bg: #f6f8fb; --card: #fff; --line: #e4e8ef; --line-strong: #d3d9e3;
-    --ink: #111a2e; --ink-2: #4b5567; --ink-3: #8a93a3;
-    --ok: #12805c; --ok-soft: #e6f6ef; --warn: #b54708; --warn-soft: #fff4e5; --bad: #c2283a; --bad-soft: #fdecee;
-    --radius: 10px;
+    --blue: #0b57d0; --blue-hover: #0a4cb8; --blue-tint: #e8f0fe; --blue-sel: #d3e3fd; --blue-line: #a8c7fa;
+    --ink: #1f1f1f; --ink-2: #444746; --ink-3: #747775; --line: #e1e3e1; --line-2: #c4c7c5;
+    --hover: #f2f6fc; --surface: #f8fafd; --bg: #fff;
+    --ok: #146c2e; --ok-bg: #c4eed0; --run: #004a77; --run-bg: #c2e7ff; --warn: #7a4a00; --warn-bg: #ffe8b0;
+    --bad: #b3261e; --bad-bg: #f9dedc; --grey-bg: #e9eef6;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
-  body { background: var(--bg); color: var(--ink); font: 14px/1.5 Poppins, system-ui, -apple-system, sans-serif; }
+  body { background: var(--bg); color: var(--ink); font: 14px/20px Roboto, "Google Sans", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
   button, input, select, textarea { font: inherit; color: inherit; }
-  a { color: var(--primary); }
+  a { color: var(--blue); text-decoration: none; }
+  h1, h2, h3, .gs { font-family: "Google Sans", Roboto, Arial, sans-serif; }
+  /* Icons are inline SVG (Material Symbols paths, see ICONS below): the icon
+     font never loaded inside Apps Script's sandboxed frame, so the page showed
+     names like "send". Each icon carries an outlined and a filled path. */
+  .ms { display: inline-block; flex: none; width: 1em; height: 1em; font-size: 20px; vertical-align: -0.2em;
+        fill: currentColor; user-select: none; }
+  .ms .f, .ms.fill .o, .nav a.on .ms .o { display: none; }
+  .ms.fill .f, .nav a.on .ms .f { display: inline; }
 
-  .app { display: flex; min-height: 100vh; }
-  /* Left nav */
-  .nav { width: 232px; flex: none; background: linear-gradient(180deg, var(--nav-1), var(--nav-2)); color: #fff;
-         padding: 22px 14px; display: flex; flex-direction: column; gap: 4px; position: sticky; top: 0; height: 100vh; }
-  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; padding: 0 10px 22px; letter-spacing: -.2px; }
-  .brand svg { width: 26px; height: 26px; }
-  .nav a { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 8px; color: rgba(255,255,255,.88);
-           text-decoration: none; font-weight: 500; }
-  .nav a:hover { background: rgba(255,255,255,.08); }
-  .nav a { white-space: nowrap; }
-  .nav a.active { background: rgba(255,255,255,.16); color: #fff; }
-  .nav a svg { width: 19px; height: 19px; flex: none; }
-  .nav .spacer { flex: 1; }
-  .nav .who { font-size: 12px; color: rgba(255,255,255,.7); padding: 10px 12px 0; word-break: break-all; }
+  .shell { display: flex; height: 100vh; }
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .scroll { flex: 1; overflow: auto; }
+  .page { padding: 12px 24px 40px; max-width: 1180px; }
 
-  .main { flex: 1; min-width: 0; }
-  .topbar { height: 56px; background: #fff; border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 24px; gap: 12px; }
-  .topbar .status { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); display: inline-block; }
+  /* Right rail: what Mailmeteor shows in Gmail's side panel. */
+  .rail { width: 264px; flex: none; border-left: 1px solid var(--line); display: flex; flex-direction: column; background: var(--bg); }
+  .rail-head { display: flex; align-items: center; gap: 10px; padding: 18px 20px 12px; }
+  .logo { width: 30px; height: 30px; border-radius: 9px; background: var(--blue); color: #fff; display: grid; place-items: center; }
+  .logo .ms { font-size: 18px; }
+  .rail-head b { font: 500 16px "Google Sans", Roboto, sans-serif; display: block; }
+  .rail-head small { color: var(--ink-3); font-size: 12px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+  .rail-body { flex: 1; overflow: auto; padding: 0 12px 12px; }
+  .rail-new { margin: 4px 8px 12px; width: calc(100% - 16px); justify-content: center; height: 40px; }
+  .nav a { display: flex; align-items: center; gap: 14px; height: 36px; padding: 0 14px; border-radius: 18px; color: var(--ink); font-weight: 500; }
+  .nav a:hover { background: var(--hover); }
+  .nav a.on { background: var(--blue-sel); color: #041e49; }
+  .nav a .ms { color: var(--ink-2); }
+  .nav a.on .ms { color: #041e49; }
+  .rail h4 { font: 500 14px "Google Sans", Roboto, sans-serif; margin: 20px 10px 6px; display: flex; align-items: center; }
+  .rail h4 a { margin-left: auto; font-size: 13px; }
+  .rc { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 8px; cursor: pointer; }
+  .rc:hover { background: var(--hover); }
+  .rc .ms { color: var(--ink-3); font-size: 18px; }
+  .rc span.t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rail-empty { color: var(--ink-3); font-size: 13px; padding: 4px 10px; }
+  .health { margin: 18px 4px 4px; padding: 12px 14px; border-radius: 12px; background: var(--surface); font-size: 13px; color: var(--ink-2); }
+  .health b { color: var(--ink); font-weight: 500; }
+  .health .row1 { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #1e8e3e; flex: none; }
   .dot.bad { background: var(--bad); }
-  .page { padding: 26px 24px 80px; max-width: 1240px; }
-  .page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
-  h1 { font-size: 30px; font-weight: 700; margin: 0; letter-spacing: -.5px; }
-  .page-head .actions { margin-left: auto; display: flex; gap: 10px; }
-  .saving { font-size: 13px; color: var(--ink-3); }
 
-  .btn { display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; padding: 9px 16px; font-weight: 600; cursor: pointer;
-         border: 1px solid var(--primary); background: #fff; color: var(--primary); white-space: nowrap; }
-  .btn:hover { background: var(--primary-soft); }
-  .btn.primary { background: var(--primary); color: #fff; }
-  .btn.primary:hover { background: var(--primary-dark); border-color: var(--primary-dark); }
-  .btn.ghost { border-color: transparent; color: var(--ink-2); background: transparent; }
-  .btn.ghost:hover { background: #eef1f6; }
-  .btn.danger { border-color: var(--line-strong); color: var(--bad); }
-  .btn.danger:hover { background: var(--bad-soft); }
-  .btn.sm { padding: 5px 11px; font-size: 13px; }
-  .btn:disabled { opacity: .55; cursor: default; }
-  .btn svg { width: 17px; height: 17px; }
-  .icon-btn { border: 0; background: transparent; color: var(--ink-3); cursor: pointer; padding: 6px; border-radius: 6px; display: inline-flex; }
-  .icon-btn:hover { background: rgba(0,0,0,.05); color: var(--ink); }
-  .icon-btn svg { width: 18px; height: 18px; }
+  /* Buttons (Gmail pills) */
+  .btn { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px; border-radius: 18px; border: 1px solid var(--line-2);
+         background: #fff; color: var(--blue); font: 500 14px "Google Sans", Roboto, sans-serif; cursor: pointer; white-space: nowrap; }
+  .btn:hover { background: var(--hover); }
+  .btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .btn.primary:hover { background: var(--blue-hover); box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+  .btn.text { border-color: transparent; padding: 0 12px; }
+  .btn.danger { color: var(--bad); }
+  .btn.sm { height: 30px; padding: 0 12px; font-size: 13px; }
+  .btn:disabled { opacity: .45; cursor: default; box-shadow: none; }
+  .btn .ms { font-size: 18px; }
+  .ibtn { width: 36px; height: 36px; border-radius: 50%; border: 0; background: transparent; color: var(--ink-2); display: inline-grid; place-items: center; cursor: pointer; flex: none; }
+  .ibtn:hover { background: rgba(68,71,70,.08); }
+  .ibtn.sm { width: 30px; height: 30px; }
 
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); }
+  /* Page header */
+  .head { display: flex; align-items: center; gap: 8px; min-height: 56px; margin-bottom: 8px; flex-wrap: wrap; }
+  .head h1 { font-size: 22px; font-weight: 400; margin: 0; line-height: 28px; }
+  .head .acts { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .saved { color: var(--ink-3); font-size: 12px; display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; }
+  .saved .ms { font-size: 16px; }
+  .eyebrow { color: var(--ink-3); font-size: 11px; letter-spacing: .8px; text-transform: uppercase; display: flex; align-items: center; gap: 4px; }
 
-  /* Composer */
-  .compose { display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 30px; align-items: start; }
-  .mail { overflow: hidden; }
-  .row { display: flex; align-items: center; gap: 14px; padding: 9px 16px; min-height: 46px; }
-  .row + .row { padding-top: 0; }
-  .row label { width: 62px; flex: none; color: var(--ink-2); }
-  .row > div { min-width: 0; overflow-wrap: anywhere; }
-  .row input { flex: 1; border: 0; outline: 0; padding: 4px 0; background: transparent; min-width: 0; }
-  .row input::placeholder, textarea::placeholder { color: var(--ink-3); }
-  .chip-btn { border: 1px solid var(--primary-line); color: var(--primary); background: #fff; border-radius: 6px; padding: 3px 10px;
-              font-size: 13px; font-weight: 600; cursor: pointer; }
-  .chip-btn:hover { background: var(--primary-soft); }
-  .recips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; flex: 1; }
-  .rchip { background: #eef1f6; border-radius: 999px; padding: 2px 10px; font-size: 13px; }
-  .rchip.more { background: transparent; color: var(--ink-3); }
-  .toolbar { display: flex; align-items: center; gap: 4px; padding: 6px 10px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-  .toolbar .sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; }
-  .tool { border: 0; background: transparent; padding: 6px 9px; border-radius: 6px; cursor: pointer; color: var(--ink-2); font-size: 13px; font-weight: 500;
-          display: inline-flex; align-items: center; gap: 6px; }
-  .tool:hover { background: #eef1f6; color: var(--ink); }
-  .tool svg { width: 16px; height: 16px; }
-  .body { width: 100%; border: 0; outline: 0; resize: none; padding: 16px; min-height: 260px; line-height: 1.6; display: block; background: transparent; }
-  .body.fu { min-height: 150px; }
+  /* Tabs (Gmail category-tab style) */
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+  .tab { border: 0; background: transparent; padding: 10px 14px 12px; cursor: pointer; color: var(--ink-2); font: 500 14px "Google Sans", Roboto, sans-serif;
+         border-bottom: 3px solid transparent; margin-bottom: -1px; display: inline-flex; gap: 6px; align-items: center; }
+  .tab:hover { background: var(--hover); }
+  .tab.on { color: var(--blue); border-bottom-color: var(--blue); }
+  .tab .n { font-size: 12px; color: var(--ink-3); }
+  .tab.on .n { color: var(--blue); }
 
-  .connector { width: 1px; height: 30px; background: var(--line-strong); margin: 0 auto; }
-  .add-fu { display: flex; justify-content: center; }
-  .fu-card { overflow: hidden; }
-  .fu-head { background: var(--primary-soft); padding: 9px 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--primary); }
-  .fu-head select, .fu-head input { border: 1px solid var(--line-strong); background: #fff; border-radius: 6px; padding: 4px 8px; color: var(--ink); }
-  .fu-head input[type=number] { width: 58px; text-align: center; }
-  .fu-head .grow { flex: 1; }
-  .fu-head .num { font-weight: 600; color: var(--ink); margin-right: 2px; }
-
-  .side { position: sticky; top: 16px; }
-  .side h3 { font-size: 16px; font-weight: 600; margin: 0 0 12px; }
-  .side section + section { margin-top: 26px; }
-  .field { margin-bottom: 12px; }
-  .field label { display: block; font-size: 13px; color: var(--ink-2); margin-bottom: 4px; }
-  .field input, .field select, .field textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 10px; background: #fff; outline: 0; }
-  .field input:focus, .field select:focus, .field textarea:focus, .rec-area:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(52,120,246,.15); }
-  .hint { font-size: 12px; color: var(--ink-3); margin-top: 4px; }
-  .seq-step { padding: 10px 12px; }
-  .seq-step + .seq-line { width: 1px; height: 14px; background: var(--line-strong); margin-left: 22px; }
-  .seq-step b { display: block; font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .seq-step span { font-size: 13px; color: var(--ink-2); display: inline-flex; gap: 4px; align-items: center; margin-right: 10px; }
-  .seq-step svg { width: 13px; height: 13px; }
-  .load-seq { display: flex; gap: 8px; }
-  .load-seq select { flex: 1; min-width: 0; border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 8px; background: #fff; }
-
-  /* Lists */
-  .banner { display: flex; gap: 12px; align-items: center; padding: 12px 16px; border-radius: var(--radius); margin-bottom: 18px; }
-  .banner.bad { background: var(--bad-soft); color: var(--bad); }
-  .banner.warn { background: var(--warn-soft); color: var(--warn); }
-  .banner .btn { margin-left: auto; }
+  /* Tables / lists (Gmail message-list density) */
   table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; font-weight: 500; color: var(--ink-3); font-size: 12px; text-transform: uppercase; letter-spacing: .4px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
-  td { padding: 14px 16px; border-bottom: 1px solid var(--line); vertical-align: middle; }
-  tr:last-child td { border-bottom: 0; }
-  td .sub { color: var(--ink-3); font-size: 13px; }
-  td.right { text-align: right; white-space: nowrap; }
-  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; background: var(--primary-soft); color: var(--primary); }
-  .empty { text-align: center; padding: 60px 20px; color: var(--ink-2); }
-  .empty h2 { color: var(--ink); font-size: 18px; margin: 0 0 6px; }
-  .empty p { margin: 0 0 18px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
-  .seq-card { padding: 18px; display: flex; flex-direction: column; gap: 10px; }
-  .seq-card h3 { margin: 0; font-size: 16px; font-weight: 600; }
-  .seq-card .meta { color: var(--ink-2); font-size: 13px; }
-  .seq-card .preview { color: var(--ink-3); font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 39px; }
-  .seq-card .btns { display: flex; gap: 8px; margin-top: auto; }
+  th { text-align: left; font-weight: 500; color: var(--ink-2); font-size: 13px; padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 0 12px; height: 48px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  tbody tr.click { cursor: pointer; }
+  tbody tr.click:hover { box-shadow: inset 1px 0 0 #dadce0, inset -1px 0 0 #dadce0, 0 1px 2px rgba(60,64,67,.3); position: relative; z-index: 1; }
+  td.name { max-width: 0; width: 46%; }
+  td.name div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td.name .s { color: var(--ink-3); font-size: 12px; line-height: 16px; }
+  td.num { color: var(--ink-2); white-space: nowrap; }
+  td.r, th.r { text-align: right; white-space: nowrap; }
+  .pill { display: inline-flex; align-items: center; height: 22px; padding: 0 10px; border-radius: 11px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+  .pill.active { background: var(--run-bg); color: var(--run); }
+  .pill.ended, .pill.completed { background: var(--ok-bg); color: var(--ok); }
+  .pill.replied { background: #e7f3d9; color: #285c0e; }
+  .pill.stopped { background: var(--warn-bg); color: var(--warn); }
+  .pill.missing, .pill.grey { background: var(--grey-bg); color: var(--ink-2); }
 
-  .settings { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
+  .empty { text-align: center; padding: 64px 20px; color: var(--ink-2); }
+  .empty .art { width: 72px; height: 72px; border-radius: 50%; background: var(--blue-tint); color: var(--blue); display: grid; place-items: center; margin: 0 auto 16px; }
+  .empty .art .ms { font-size: 34px; }
+  .empty h2 { font-size: 20px; font-weight: 400; color: var(--ink); margin: 0 0 6px; }
+  .empty p { margin: 0 auto 20px; max-width: 420px; }
+
+  .banner { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-radius: 12px; margin: 4px 0 12px; font-size: 14px; }
+  .banner .ms { font-size: 20px; }
+  .banner.bad { background: var(--bad-bg); color: #601410; }
+  .banner.warn { background: #fef7e0; color: #5c3c00; }
+  .banner .btn { margin-left: auto; }
+
+  /* Composer — Mailmeteor's layout */
+  .compose { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 24px; align-items: start; }
+  .mail { border: 1px solid var(--line); border-radius: 16px; background: #fff; overflow: hidden; }
+  .fld { display: flex; align-items: center; gap: 12px; padding: 0 16px; min-height: 44px; }
+  .fld + .fld { border-top: 1px solid #f0f2f0; }
+  .fld > label { width: 64px; flex: none; color: var(--ink-3); }
+  .fld > input, .fld > .val { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; padding: 10px 0; }
+  .fld > .val { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fld input::placeholder, textarea::placeholder { color: var(--ink-3); }
+  .linkbtn { border: 0; background: transparent; color: var(--blue); font-weight: 500; cursor: pointer; padding: 6px 0; }
+  .linkbtn:hover { text-decoration: underline; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 14px; border: 1px solid var(--line-2);
+          background: #fff; cursor: pointer; font-weight: 500; color: var(--blue); }
+  .chip:hover { background: var(--hover); }
+  .chip .ms { font-size: 16px; }
+  .tools { display: flex; align-items: center; gap: 2px; padding: 4px 8px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: #fff; flex-wrap: wrap; }
+  .tool { height: 32px; border: 0; background: transparent; border-radius: 16px; padding: 0 10px; cursor: pointer; color: var(--ink-2);
+          display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; }
+  .tool:hover { background: rgba(68,71,70,.08); color: var(--ink); }
+  .tool .ms { font-size: 18px; }
+  .tools .sep { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+  .tools .note { margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; color: var(--ink-3); font-size: 12px; padding-right: 6px; }
+  .body { width: 100%; border: 0; outline: 0; resize: none; padding: 16px; min-height: 280px; line-height: 22px; display: block; background: transparent; }
+  .body.fu { min-height: 140px; }
+  .ccrow { display: flex; align-items: center; gap: 12px; padding: 0 16px; min-height: 40px; border-bottom: 1px solid #f0f2f0; }
+  .ccrow label { width: 64px; color: var(--ink-3); flex: none; }
+  .ccrow input { flex: 1; border: 0; outline: 0; padding: 8px 0; min-width: 0; }
+
+  .link-line { width: 2px; height: 28px; background: var(--line); margin: 0 auto; }
+  .fu-card { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: #fff; }
+  .fu-bar { background: var(--blue-tint); padding: 8px 6px 8px 12px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: #041e49; font-size: 13px; }
+  .fu-bar .num { width: 24px; height: 24px; border-radius: 50%; background: var(--blue); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 500; flex: none; }
+  .fu-bar select, .fu-bar input { height: 30px; border: 1px solid var(--blue-line); background: #fff; border-radius: 8px; padding: 0 2px 0 6px; outline: 0; font-size: 13px; }
+  .fu-bar select:focus, .fu-bar input:focus { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
+  .fu-bar input[type=number] { width: 48px; text-align: center; padding: 0 2px; }
+  .fu-bar .grow { flex: 1; }
+  .add-fu { display: flex; justify-content: center; }
+
+  .side { position: sticky; top: 8px; }
+  .side h3 { font-size: 16px; font-weight: 400; margin: 6px 0 14px; }
+  .side section + section { margin-top: 26px; }
+  .opt { display: flex; align-items: center; gap: 10px; min-height: 36px; color: var(--ink); }
+  .opt .ms { color: var(--ink-2); font-size: 20px; }
+  .opt .grow { flex: 1; }
+  .lock { font-size: 12px; color: var(--ok); background: var(--ok-bg); border-radius: 10px; padding: 1px 8px; font-weight: 500; }
+  .field { margin: 10px 0 14px; }
+  .field label { display: block; font-size: 12px; color: var(--ink-2); margin-bottom: 4px; }
+  .field input, .field select, .field textarea, .search input { width: 100%; border: 1px solid var(--line-2); border-radius: 8px; padding: 9px 12px; background: #fff; outline: 0; }
+  .field input:focus, .field select:focus, .field textarea:focus, .search input:focus, .paste:focus { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
+  .hint { font-size: 12px; color: var(--ink-3); margin-top: 4px; line-height: 16px; }
+  .optbtn { width: 100%; border: 0; background: transparent; padding: 4px 6px; margin: 2px -6px; box-sizing: content-box; border-radius: 10px; cursor: pointer; text-align: left; font: inherit; }
+  .optbtn:hover { background: var(--hover); }
+  .optbtn small { display: block; font-size: 12px; color: var(--ink-3); }
+  .opt .offpill { font-size: 12px; color: var(--ink-2); background: var(--grey-bg); border-radius: 10px; padding: 1px 8px; font-weight: 500; }
+  .ap-toggle { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; cursor: pointer; color: var(--ink); }
+  .ap-toggle input { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--blue); flex: none; }
+  .ap-toggle small { display: block; color: var(--ink-2); font-size: 13px; margin-top: 2px; }
+  .ap-body.dim { opacity: .45; }
+  .ap-h { color: var(--ink); font-weight: 500; margin: 18px 0 2px; }
+  .ap-h small { display: block; font-weight: 400; color: var(--ink-3); font-size: 12px; }
+  .ap-day { display: flex; align-items: center; gap: 8px; min-height: 40px; color: var(--ink); }
+  .ap-day label { display: flex; align-items: center; gap: 10px; width: 130px; cursor: pointer; }
+  .ap-day input[type=checkbox] { width: 18px; height: 18px; margin: 0; accent-color: var(--blue); }
+  .ap-day input[type=time] { border: 1px solid var(--line-2); border-radius: 8px; padding: 6px 8px; font: inherit; background: #fff; }
+  .ap-day.off input[type=time], .ap-day.off .offtxt { visibility: hidden; }
+  .ap-day .offtxt { color: var(--ink-3); font-size: 13px; }
+  .ap-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 8px; }
+  .ap-grid .field { margin: 8px 0 0; }
+  .ap-sum { margin-top: 16px; padding: 12px 14px; border-radius: 14px; background: var(--blue-tint); color: #041e49; display: flex; gap: 10px; }
+  .ap-sum .ms { color: var(--blue); }
+  .ap-sum.warn { background: var(--warn-bg); color: var(--warn); }
+  .ap-sum.warn .ms { color: var(--warn); }
+  .ap-note { font-size: 12px; color: var(--ink-3); margin-top: 10px; line-height: 17px; }
+  @media (max-width: 520px) { .ap-grid { grid-template-columns: 1fr; } .ap-day label { width: 112px; } .ap-day { flex-wrap: wrap; } }
+  .seq { display: flex; flex-direction: column; }
+  .seq-item { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: #fff; }
+  .seq-item b { font-weight: 500; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .seq-item small { color: var(--ink-2); display: flex; gap: 10px; flex-wrap: wrap; margin-top: 2px; font-size: 12px; }
+  .seq-item small span { display: inline-flex; gap: 3px; align-items: center; }
+  .seq-item small .ms { font-size: 14px; }
+  .seq-join { width: 2px; height: 10px; background: var(--line); margin-left: 22px; }
+  .sidelinks { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin-top: 10px; }
+
+  .meter { display: flex; align-items: center; gap: 12px; padding: 14px 0 0; color: var(--ink-2); font-size: 12px; }
+  .meter .bar { width: 200px; height: 6px; border-radius: 3px; background: var(--grey-bg); overflow: hidden; }
+  .meter .bar i { display: block; height: 100%; background: var(--blue); border-radius: 3px; }
+  .meter .bar i.over { background: var(--bad); }
+
+  /* Campaign report */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 12px; margin: 8px 0 22px; }
+  .tile { border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; }
+  .tile small { color: var(--ink-2); font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .tile small .ms { font-size: 18px; color: var(--blue); }
+  .tile b { font: 400 26px/34px "Google Sans", Roboto, sans-serif; display: block; margin-top: 4px; }
+  .tile b em { font-style: normal; font-size: 14px; color: var(--ink-3); margin-left: 6px; }
+  .section-h { font: 400 16px "Google Sans", Roboto, sans-serif; margin: 6px 0 8px; display: flex; align-items: center; }
+  .card { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  .stages { display: inline-flex; align-items: center; gap: 2px; background: var(--surface); border-radius: 14px; padding: 2px 6px; }
+  .stages .ms { font-size: 16px; width: 22px; text-align: center; color: var(--ink-3); }
+  .stages .sent { color: var(--ok); }
+  .stages .next { color: var(--blue); background: #fff; border-radius: 50%; box-shadow: 0 1px 2px rgba(60,64,67,.3); padding: 2px 0; }
+  .stages .skipped { color: #b9bcbb; }
+  .meta { display: flex; gap: 22px; color: var(--ink-2); font-size: 13px; margin: 2px 0 6px; flex-wrap: wrap; }
+  .meta span b { color: var(--ink); font-weight: 500; margin-left: 4px; }
+
+  /* Sent emails + sequences */
+  .search { display: flex; gap: 8px; margin: 4px 0 12px; }
+  .search input { border-radius: 24px; background: var(--grey-bg); border-color: transparent; padding: 10px 18px; }
+  .search input:focus { background: #fff; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .seq-card { border: 1px solid var(--line); border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .seq-card:hover { box-shadow: 0 1px 3px rgba(60,64,67,.25); }
+  .seq-card h3 { margin: 0; font-size: 16px; font-weight: 500; }
+  .seq-card .m { color: var(--ink-2); font-size: 13px; }
+  .seq-card .p { color: var(--ink-3); font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 40px; }
+  .seq-card .b { display: flex; gap: 6px; margin-top: auto; }
+  .thread-top { border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+  .thread-top .sj { font: 400 18px "Google Sans", Roboto, sans-serif; margin-bottom: 4px; overflow-wrap: anywhere; }
+  .thread-top .mt { color: var(--ink-2); font-size: 13px; overflow-wrap: anywhere; }
+  .thread-top .sn { margin-top: 10px; color: var(--ink-2); font-size: 13px; background: var(--surface); border-radius: 10px; padding: 10px 12px; overflow-wrap: anywhere; }
+  .qrow { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-top: 1px solid var(--line); }
+  .qrow .grow { flex: 1; min-width: 0; }
+  .qrow .w { font-weight: 500; font-size: 13px; }
+  .qrow .mg { color: var(--ink-2); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .settings { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; align-items: start; }
   .settings .card { padding: 20px; }
-  .settings h3 { margin: 0 0 14px; font-size: 16px; }
-  .kv { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .settings h3 { margin: 0 0 8px; font-size: 16px; font-weight: 400; }
+  .kv { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
   .kv:last-of-type { border-bottom: 0; }
   .kv span:first-child { color: var(--ink-2); }
   .kv span:last-child { text-align: right; word-break: break-all; }
 
-  /* Threads */
-  .search { display: flex; gap: 8px; margin-bottom: 16px; }
-  .search input { flex: 1; min-width: 0; border: 1px solid var(--line-strong); border-radius: 8px; padding: 9px 12px; background: #fff; outline: 0; }
-  .tlist .titem { display: flex; gap: 12px; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--line); cursor: pointer; }
-  .tlist .titem:last-child { border-bottom: 0; }
-  .tlist .titem:hover { background: #fafbfd; }
-  .titem .main-col { flex: 1; min-width: 0; }
-  .titem .subj { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .titem .sub { color: var(--ink-3); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .titem .tags { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-  .pill.ok { background: var(--ok-soft); color: var(--ok); }
-  .pill.warn { background: var(--warn-soft); color: var(--warn); }
-  .pill.gray { background: #eef1f6; color: var(--ink-2); }
-  .thread-card { padding: 16px; }
-  .thread-card .subj { font-size: 17px; font-weight: 600; margin-bottom: 4px; overflow-wrap: anywhere; }
-  .thread-card .meta { color: var(--ink-2); font-size: 13px; overflow-wrap: anywhere; }
-  .thread-card .snip { margin-top: 10px; color: var(--ink-2); font-size: 13px; background: #f6f8fb; border-radius: 8px; padding: 10px 12px; overflow-wrap: anywhere; }
-  .queue { margin-top: 16px; }
-  .queue h3 { font-size: 15px; margin: 0 0 8px; }
-  .qitem { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-bottom: 1px solid var(--line); }
-  .qitem:last-child { border-bottom: 0; }
-  .qitem .main-col { flex: 1; min-width: 0; }
-  .qitem .when { font-weight: 500; font-size: 13px; }
-  .qitem .msg { color: var(--ink-2); font-size: 13px; overflow-wrap: anywhere; }
-  .cc-rows { border-top: 1px solid var(--line); }
-  .cc-rows .row { min-height: 40px; }
-  .fu-head input[type=datetime-local] { width: auto; }
+  /* Footer line */
+  .foot { border-top: 1px solid var(--line); padding: 8px 24px; display: flex; align-items: center; gap: 16px; color: var(--ink-3); font-size: 12px; }
+  .foot .grow { flex: 1; }
 
-  /* Modal + toast */
-  .scrim { position: fixed; inset: 0; background: rgba(10,15,40,.45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
-  .modal { background: #fff; border-radius: 12px; width: 100%; max-width: 560px; max-height: 88vh; overflow: auto; box-shadow: 0 20px 60px rgba(0,0,0,.25); }
-  .modal header { padding: 18px 20px 6px; font-size: 18px; font-weight: 600; }
-  .modal .content { padding: 8px 20px 4px; color: var(--ink-2); }
-  .modal footer { padding: 16px 20px 18px; display: flex; justify-content: flex-end; gap: 10px; }
-  .preview-mail { border: 1px solid var(--line); border-radius: 8px; padding: 14px; color: var(--ink); white-space: pre-wrap; margin-top: 8px; }
-  .preview-mail .ph { color: var(--ink-3); font-size: 13px; border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 10px; white-space: normal; }
-  .rec-area { width: 100%; min-height: 170px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 10px; outline: 0; resize: vertical; }
-  .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: #111a2e; color: #fff; padding: 11px 18px; border-radius: 10px;
-           box-shadow: 0 10px 30px rgba(0,0,0,.25); z-index: 60; max-width: calc(100% - 32px); font-size: 14px; }
-  .menu { position: absolute; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.12); padding: 4px; z-index: 40; min-width: 200px; }
-  .menu button { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
-  .menu button:hover { background: #eef1f6; }
-  .menu small { color: var(--ink-3); display: block; }
-  .loading { display: flex; align-items: center; justify-content: center; height: 60vh; color: var(--ink-3); gap: 10px; }
-  .spin { width: 20px; height: 20px; border: 2px solid var(--primary-line); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; }
+  /* Drawer (Show preview), modal, menu, toast */
+  .scrim { position: fixed; inset: 0; background: rgba(32,33,36,.4); z-index: 50; }
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100%); background: #fff; z-index: 51; display: flex; flex-direction: column;
+            box-shadow: 0 8px 24px rgba(0,0,0,.2); animation: slide .18s ease-out; }
+  @keyframes slide { from { transform: translateX(40px); opacity: 0; } }
+  .drawer header { display: flex; align-items: center; gap: 8px; padding: 14px 12px 10px 20px; }
+  .drawer header h2 { font-size: 18px; font-weight: 400; margin: 0; flex: 1; }
+  .drawer .bar2 { display: flex; align-items: center; gap: 8px; padding: 0 20px 12px; border-bottom: 1px solid var(--line); }
+  .seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 18px; overflow: hidden; }
+  .seg button { border: 0; background: #fff; height: 32px; width: 44px; cursor: pointer; color: var(--ink-2); display: grid; place-items: center; }
+  .seg button.on { background: var(--blue-sel); color: #041e49; }
+  .pager { margin-left: auto; display: flex; align-items: center; gap: 4px; color: var(--ink-2); font-size: 13px; }
+  .drawer .content { flex: 1; overflow: auto; padding: 16px 20px; background: var(--surface); }
+  .drawer footer { display: flex; gap: 8px; justify-content: flex-end; align-items: center; padding: 12px 20px; border-top: 1px solid var(--line); }
+  .drawer footer .why { margin-right: auto; color: var(--ink-3); font-size: 12px; }
+  .checks { border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; background: #fff; border: 1px solid var(--line); }
+  .checks h4 { margin: 0 0 6px; font: 500 14px "Google Sans", Roboto, sans-serif; display: flex; align-items: center; gap: 8px; }
+  .checks ul { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 13px; }
+  .checks li + li { margin-top: 3px; }
+  .checks.ok h4 { color: var(--ok); }
+  .checks.bad { border-color: #f2b8b5; }
+  .checks.bad h4 { color: var(--bad); }
+  .checks.warn h4 { color: #7a4a00; }
+  .email { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin: 0 auto 12px; transition: max-width .15s; }
+  .email.mobile { max-width: 375px; }
+  .email .sj { font: 400 20px/28px "Google Sans", Roboto, sans-serif; margin-bottom: 12px; }
+  .email .who { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; }
+  .avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--blue); color: #fff; display: grid; place-items: center; font-weight: 500; flex: none; }
+  .email .who b { font-weight: 500; }
+  .email .who small { color: var(--ink-3); display: block; font-size: 12px; }
+  .email .tx { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 22px; }
+  .email .tag { font-size: 12px; color: var(--blue); background: var(--blue-tint); display: inline-block; border-radius: 10px; padding: 1px 10px; margin-bottom: 10px; }
+  .modal-wrap { position: fixed; inset: 0; display: grid; place-items: center; z-index: 60; padding: 16px; }
+  .modal { background: #fff; border-radius: 28px; width: 100%; max-width: 560px; max-height: 88vh; overflow: auto; box-shadow: 0 8px 24px rgba(0,0,0,.25); position: relative; }
+  .modal header { padding: 24px 24px 8px; font: 400 22px "Google Sans", Roboto, sans-serif; }
+  .modal .content { padding: 4px 24px 8px; color: var(--ink-2); }
+  .modal footer { padding: 16px 24px 20px; display: flex; justify-content: flex-end; gap: 8px; }
+  .rec { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 16px; }
+  .rec-tabs { display: flex; flex-direction: column; gap: 4px; }
+  .rec-tabs button { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 14px; border-radius: 20px; border: 0; background: transparent; cursor: pointer; text-align: left; font-weight: 500; color: var(--ink-2); }
+  .rec-tabs button.on { background: var(--blue-sel); color: #041e49; }
+  .rec-tabs button:hover:not(.on) { background: var(--hover); }
+  .paste { width: 100%; min-height: 220px; border: 1px solid var(--line-2); border-radius: 12px; padding: 12px; outline: 0; resize: vertical; line-height: 20px; }
+  .rec-table { border: 1px solid var(--line); border-radius: 12px; max-height: 240px; overflow: auto; }
+  .rec-table td { height: 36px; }
+  .toast { position: fixed; bottom: 24px; left: 24px; background: #303030; color: #f2f2f2; padding: 14px 18px; border-radius: 4px; box-shadow: 0 3px 5px rgba(0,0,0,.3);
+           z-index: 70; max-width: min(560px, calc(100% - 48px)); font-size: 14px; }
+  .menu { position: absolute; background: #fff; border-radius: 8px; box-shadow: 0 2px 6px 2px rgba(60,64,67,.15), 0 1px 2px rgba(60,64,67,.3); padding: 8px 0; z-index: 45; min-width: 220px; }
+  .menu button { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; background: transparent; padding: 8px 16px; cursor: pointer; }
+  .menu button:hover { background: #f1f3f4; }
+  .menu button .ms { color: var(--ink-2); font-size: 18px; }
+  .menu small { color: var(--ink-3); display: block; font-size: 12px; }
+  .loading { display: flex; align-items: center; justify-content: center; height: 50vh; color: var(--ink-3); gap: 12px; }
+  .spin { width: 22px; height: 22px; border: 3px solid var(--blue-tint); border-top-color: var(--blue); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+  .spin.sm { width: 16px; height: 16px; border-width: 2px; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  @media (max-width: 960px) {
-    .compose, .settings { grid-template-columns: minmax(0, 1fr); }
-    .side { position: static; }
+  @media (max-width: 720px) {
+    .compose { grid-template-columns: minmax(0, 1fr); }
   }
-  @media (max-width: 760px) {
-    .app { flex-direction: column; }
-    .nav { width: auto; height: auto; position: static; flex-direction: row; align-items: center; padding: 10px 12px; gap: 2px; overflow-x: auto; }
-    .brand { padding: 0 8px 0 4px; font-size: 16px; }
-    .brand span, .nav .who, .nav .spacer { display: none; }
-    .nav a { padding: 8px 10px; font-size: 13px; }
-    .nav a svg { display: none; }
-    .topbar { display: none; }
-    .page { padding: 18px 16px 70px; }
-    h1 { font-size: 24px; }
-    .page-head .actions { margin-left: 0; width: 100%; flex-wrap: wrap; }
-    .page-head .actions .btn { flex: 1 1 auto; justify-content: center; padding: 9px 12px; }
-    .row label { width: 52px; }
-    th:nth-child(2), td:nth-child(2), th:nth-child(3), td:nth-child(3) { display: none; }
-    td, th { padding: 12px 10px; }
-    .titem { padding: 12px; }
+  @media (max-width: 1080px) {
+    .settings { grid-template-columns: minmax(0, 1fr); }
   }
+  @media (max-width: 1000px) {
+    .hide-md { display: none; }
+    .head h1 { font-size: 20px; }
+  }
+  @media (max-width: 700px) {
+    .rail { display: none; }
+    .page { padding: 8px 16px 32px; }
+    .foot { padding: 8px 16px; }
+    .hide-sm { display: none; }
+    .rec { grid-template-columns: minmax(0, 1fr); }
+    .rec-tabs { flex-direction: row; flex-wrap: wrap; }
+    .mobile-nav { display: flex !important; }
+  }
+  body.composing .rail { display: none; }
+  body.composing .mobile-nav { display: none !important; }
+  .mobile-nav { display: none; gap: 4px; overflow-x: auto; padding: 8px 16px 0; }
 </style>
 </head>
 <body>
-<div class="app">
-  <nav class="nav">
-    <div class="brand">
-      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>
-      <span>Follow-up Studio</span>
-    </div>
-    <a href="#campaigns" data-nav="campaigns"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>Campaigns</a>
-    <a href="#new" data-nav="new"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>New campaign</a>
-    <a href="#threads" data-nav="threads"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 5 5v6"/></svg>Sent emails</a>
-    <a href="#sequences" data-nav="sequences"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><path d="M6.5 10v4a3 3 0 0 0 3 3H14"/></svg>Sequences</a>
-    <a href="#settings" data-nav="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</a>
-    <div class="spacer"></div>
-    <div class="who" id="who"></div>
-  </nav>
+<div class="shell">
   <div class="main">
-    <div class="topbar"><div class="status" id="status"></div></div>
-    <div class="page" id="page"><div class="loading"><div class="spin"></div>Loading your workspace…</div></div>
+    <div class="mobile-nav" id="mnav"></div>
+    <div class="scroll" id="scroll"><div class="page" id="page"><div class="loading"><div class="spin"></div>Loading your campaigns…</div></div></div>
+    <div class="foot" id="foot"></div>
   </div>
+  <aside class="rail" id="rail"></aside>
 </div>
 
 <script>
@@ -249,21 +367,21 @@
     });
   }
 
-  // ───── State ─────
-  var B = null;                 // bootstrap payload
-  var draft = null;             // composer state (campaign or sequence)
+  var B = null;          // bootstrap payload
+  var draft = null;      // composer state: campaign | sequence | thread
   var DRAFT_KEY = 'fus.campaignDraft';
-  var I = {
-    bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg>',
-    clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
-    x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
-    send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>',
-    braces: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1"/></svg>',
-    layers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/></svg>',
-    eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>',
-    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>'
-  };
+  var current = 'campaigns';
+  var listTab = 'all';
+  var report = null;     // last campaign report
 
+  var ICONS = {"account_tree":{"vb":"0 -960 960 960","d":"M624-144v-108H444v-384H336v108H96v-288h240v108h288v-108h240v288H624v-108H516v312h108v-108h240v288H624ZM168-744v144-144Zm528 384v144-144Zm0-384v144-144Zm0 144h96v-144h-96v144Zm0 384h96v-144h-96v144ZM168-600h96v-144h-96v144Z","f":"M624-144v-108H444v-384H336v108H96v-288h240v108h288v-108h240v288H624v-108H516v312h108v-108h240v288H624Z"},"add":{"vb":"0 -960 960 960","d":"M444-444H240v-72h204v-204h72v204h204v72H516v204h-72v-204Z","f":"M444-444H240v-72h204v-204h72v204h204v72H516v204h-72v-204Z"},"arrow_back":{"vb":"0 -960 960 960","d":"m330-444 201 201-51 51-288-288 288-288 51 51-201 201h438v72H330Z","f":"m330-444 201 201-51 51-288-288 288-288 51 51-201 201h438v72H330Z"},"auto_mode":{"vb":"0 -960 960 960","d":"m480-290-60-132-132-60 132-60 60-132 60 132 132 60-132 60-60 132Zm0 240q-109 0-203.5-52T120-244v110H48v-228h228v72h-99q51 78 130.5 123T480-122q116 0 209-67.5T821-366l70 16q-43 135-156 217.5T480-50ZM50-518q6-67 31-129t70-113l51 51q-33 42-54 90t-26 101H50Zm202-242-50-51q51-45 113-70.5T444-912v72q-53 6-101.5 27T252-760Zm456 0q-42-33-90.5-53.5T516-840v-72q68 5 130 30t113 70l-51 52Zm130 242q-6-53-26.5-101T758-709l52-52q44 51 70 113t31 130h-73Z","f":"m480-290-60-132-132-60 132-60 60-132 60 132 132 60-132 60-60 132Zm0 240q-109 0-203.5-52T120-244v110H48v-228h228v72h-99q51 78 130.5 123T480-122q116 0 209-67.5T821-366l70 16q-43 135-156 217.5T480-50ZM50-518q6-67 31-129t70-113l51 51q-33 42-54 90t-26 101H50Zm202-242-50-51q51-45 113-70.5T444-912v72q-53 6-101.5 27T252-760Zm456 0q-42-33-90.5-53.5T516-840v-72q68 5 130 30t113 70l-51 52Zm130 242q-6-53-26.5-101T758-709l52-52q44 51 70 113t31 130h-73Z"},"block":{"vb":"0 -960 960 960","d":"M331-126q-70-30-122.5-82.5T126-331q-30-70-30-149 0-80 30-149.5t82.5-122Q261-804 331-834t149.5-30q79.5 0 149 30t122 82.5Q804-699 834-629.5T864-480q0 79-30 149t-82.5 122.5Q699-156 629.5-126t-149 30Q401-96 331-126Zm149-42q55 0 104-18t89-50L236-673q-32 40-50 89t-18 104q0 130 91 221t221 91Zm244-119q32-40 50-89t18-104q0-130-91-221t-221-91q-55 0-104 18t-89 50l437 437ZM480-480Z","f":"M331-126q-70-30-122.5-82.5T126-331q-30-70-30-149 0-80 30-149.5t82.5-122Q261-804 331-834t149.5-30q79.5 0 149 30t122 82.5Q804-699 834-629.5T864-480q0 79-30 149t-82.5 122.5Q699-156 629.5-126t-149 30Q401-96 331-126Zm343-109q14-11 27-24t24-27L286-725q-14 11-27 24t-24 27l439 439Z"},"bolt":{"vb":"0 -960 960 960","d":"m437-249 183-231H471l26-221-173 269h146l-33 183ZM336-96l48-264H192l324-504h72l-36 312h216L408-96h-72Zm136-379Z","f":"m336-96 48-264H192l324-504h72l-36 312h216L408-96h-72Z"},"campaign":{"vb":"0 -960 960 960","d":"M720-444v-72h144v72H720Zm41 276-118-82 42-59 118 82-42 59Zm-77-483-41-59 118-82 41 59-118 82ZM192-192v-192h-24q-29.7 0-50.85-21.15Q96-426.3 96-456v-48q0-29.7 21.15-50.85Q138.3-576 168-576h139l221-132v456L313-384h-25v192h-96Zm264-189v-200l-129 77H168v48h166l122 75Zm120 18v-234q23 22 35.5 53t12.5 64q0 33-12.5 64T576-363ZM312-481Z","f":"M720-444v-72h144v72H720Zm41 276-118-82 42-59 118 82-42 59Zm-77-483-41-59 118-82 41 59-118 82ZM192-192v-192h-24q-30 0-51-21t-21-51v-48q0-30 21-51t51-21h139l221-132v456L313-384h-25v192h-96Zm384-171v-234q23 22 35.5 53t12.5 64q0 33-12.5 64T576-363Z"},"cancel":{"vb":"0 -960 960 960","d":"m339-288 141-141 141 141 51-51-141-141 141-141-51-51-141 141-141-141-51 51 141 141-141 141 51 51ZM480-96q-79 0-149-30t-122.5-82.5Q156-261 126-331T96-480q0-80 30-149.5t82.5-122Q261-804 331-834t149-30q80 0 149.5 30t122 82.5Q804-699 834-629.5T864-480q0 79-30 149t-82.5 122.5Q699-156 629.5-126T480-96Zm0-72q130 0 221-91t91-221q0-130-91-221t-221-91q-130 0-221 91t-91 221q0 130 91 221t221 91Zm0-312Z","f":"m339-288 141-141 141 141 51-51-141-141 141-141-51-51-141 141-141-141-51 51 141 141-141 141 51 51ZM480-96q-79 0-149-30t-122.5-82.5Q156-261 126-331T96-480q0-80 30-149.5t82.5-122Q261-804 331-834t149-30q80 0 149.5 30t122 82.5Q804-699 834-629.5T864-480q0 79-30 149t-82.5 122.5Q699-156 629.5-126T480-96Z"},"check":{"vb":"0 -960 960 960","d":"M389-267 195-460l51-52 143 143 325-324 51 51-376 375Z","f":"M389-267 195-460l51-52 143 143 325-324 51 51-376 375Z"},"check_circle":{"vb":"0 -960 960 960","d":"m429-336 238-237-51-51-187 186-85-84-51 51 136 135Zm51 240q-79 0-149-30t-122.5-82.5Q156-261 126-331T96-480q0-80 30-149.5t82.5-122Q261-804 331-834t149-30q80 0 149.5 30t122 82.5Q804-699 834-629.5T864-480q0 79-30 149t-82.5 122.5Q699-156 629.5-126T480-96Zm0-72q130 0 221-91t91-221q0-130-91-221t-221-91q-130 0-221 91t-91 221q0 130 91 221t221 91Zm0-312Z","f":"m429-336 238-237-51-51-187 186-85-84-51 51 136 135Zm51 240q-79 0-149-30t-122.5-82.5Q156-261 126-331T96-480q0-80 30-149.5t82.5-122Q261-804 331-834t149-30q80 0 149.5 30t122 82.5Q804-699 834-629.5T864-480q0 79-30 149t-82.5 122.5Q699-156 629.5-126T480-96Z"},"chevron_left":{"vb":"0 -960 960 960","d":"M576-240 336-480l240-240 51 51-189 189 189 189-51 51Z","f":"M576-240 336-480l240-240 51 51-189 189 189 189-51 51Z"},"chevron_right":{"vb":"0 -960 960 960","d":"M522-480 333-669l51-51 240 240-240 240-51-51 189-189Z","f":"M522-480 333-669l51-51 240 240-240 240-51-51 189-189Z"},"close":{"vb":"0 -960 960 960","d":"m291-240-51-51 189-189-189-189 51-51 189 189 189-189 51 51-189 189 189 189-51 51-189-189-189 189Z","f":"m291-240-51-51 189-189-189-189 51-51 189 189 189-189 51 51-189 189 189 189-51 51-189-189-189 189Z"},"cloud_done":{"vb":"0 -960 960 960","d":"m429-314 204-204-51-51-153 153-68-68-51 51 119 119ZM240-192q-80 0-136-56T48-384q0-76 52-131.5T227-576q23-85 92.5-138.5T480-768q103 0 179 69.5T744-528q70 0 119 49t49 119q0 70-49 119t-119 49H240Zm0-72h504q40 0 68-28t28-68q0-40-28-68t-68-28h-66l-6-65q-7-74-62-124.5T480-696q-64 0-114.5 38.5T297-556l-14 49-51 3q-48 3-80 37.5T120-384q0 50 35 85t85 35Zm240-216Z","f":"m429-314 204-204-51-51-153 153-68-68-51 51 119 119ZM240-192q-80 0-136-56T48-384q0-76 52-131.5T227-576q23-85 92.5-138.5T480-768q103 0 179 69.5T744-528q70 0 119 49t49 119q0 70-49 119t-119 49H240Z"},"computer":{"vb":"0 -960 960 960","d":"M48-144v-72h864v72H48Zm120-120q-29.7 0-50.85-21.15Q96-306.3 96-336v-408q0-29.7 21.15-50.85Q138.3-816 168-816h624q29.7 0 50.85 21.15Q864-773.7 864-744v408q0 29.7-21.15 50.85Q821.7-264 792-264H168Zm0-72h624v-408H168v408Zm0 0v-408 408Z","f":"M168-264q-29.7 0-50.85-21.15Q96-306.3 96-336v-408q0-29.7 21.15-50.85Q138.3-816 168-816h624q29.7 0 50.85 21.15Q864-773.7 864-744v408q0 29.7-21.15 50.85Q821.7-264 792-264H168ZM48-144v-72h864v72H48Z"},"content_paste":{"vb":"0 -960 960 960","d":"M216-144q-29.7 0-50.85-21.15Q144-186.3 144-216v-528q0-29.7 21.15-50.85Q186.3-816 216-816h171q8-31 33.5-51.5T480-888q34 0 59.5 20.5T573-816h171q29.7 0 50.85 21.15Q816-773.7 816-744v528q0 29.7-21.15 50.85Q773.7-144 744-144H216Zm0-72h528v-528h-72v120H288v-120h-72v528Zm289.5-538.29q10.5-10.29 10.5-25.5t-10.29-25.71q-10.29-10.5-25.5-10.5t-25.71 10.29q-10.5 10.29-10.5 25.5t10.29 25.71q10.29 10.5 25.5 10.5t25.71-10.29Z","f":"M216-144q-29.7 0-50.85-21.15Q144-186.3 144-216v-528q0-29.7 21.15-50.85Q186.3-816 216-816h171q8-31 33.5-51.5T480-888q34 0 59.5 20.5T573-816h171q29.7 0 50.85 21.15Q816-773.7 816-744v528q0 29.7-21.15 50.85Q773.7-144 744-144H216Zm0-72h528v-528h-72v120H288v-120h-72v528Zm289.5-538.29q10.5-10.29 10.5-25.5t-10.29-25.71q-10.29-10.5-25.5-10.5t-25.71 10.29q-10.5 10.29-10.5 25.5t10.29 25.71q10.29 10.5 25.5 10.5t25.71-10.29Z"},"csv":{"vb":"0 -960 960 960","d":"M288-384h72v-48h-72v-96h72v-48h-72q-20.4 0-34.2 13.8Q240-548.4 240-528v96q0 20.4 13.8 34.2Q267.6-384 288-384Zm120 0h96q10.2 0 17.1-6.9 6.9-6.9 6.9-17.1v-72q0-10-6.9-17t-17.1-7h-48v-24h72v-48h-96q-10.2 0-17.1 6.9-6.9 6.9-6.9 17.1v72q0 10 6.9 17t17.1 7h48v24h-72v48Zm208 0h48l56-192h-50l-30 103-30-103h-50l56 192ZM168-192q-29.7 0-50.85-21.16Q96-234.32 96-264.04v-432.24Q96-726 117.15-747T168-768h624q29.7 0 50.85 21.16Q864-725.68 864-695.96v432.24Q864-234 842.85-213T792-192H168Zm0-72h624v-432H168v432Zm0 0v-432 432Z","f":"M288-384h72v-48h-72v-96h72v-48h-72q-20.4 0-34.2 13.8Q240-548.4 240-528v96q0 20.4 13.8 34.2Q267.6-384 288-384Zm120 0h96q10.2 0 17.1-6.9 6.9-6.9 6.9-17.1v-72q0-10-6.9-17t-17.1-7h-48v-24h72v-48h-96q-10.2 0-17.1 6.9-6.9 6.9-6.9 17.1v72q0 10 6.9 17t17.1 7h48v24h-72v48Zm208 0h48l56-192h-50l-30 103-30-103h-50l56 192ZM168-192q-29.7 0-50.85-21.16Q96-234.32 96-264.04v-432.24Q96-726 117.15-747T168-768h624q29.7 0 50.85 21.16Q864-725.68 864-695.96v432.24Q864-234 842.85-213T792-192H168Z"},"data_object":{"vb":"0 -960 960 960","d":"M576-192v-72h84q15.3 0 25.65-10.35Q696-284.7 696-300v-72q0-41 27.5-70.5T792-477v-4q-41-8-68.5-37T696-588v-72q0-15.3-10.35-25.65Q675.3-696 660-696h-84v-72h84q45 0 76.5 31.5T768-660v72q0 15.3 10.35 25.65Q788.7-552 804-552h60v144h-60q-15.3 0-25.65 10.35Q768-387.3 768-372v72q0 45-31.5 76.5T660-192h-84Zm-276 0q-45 0-76.5-31.5T192-300v-72q0-15.3-10.35-25.65Q171.3-408 156-408H96v-144h60q15.3 0 25.65-10.35Q192-572.7 192-588v-72q0-45 31.5-76.5T300-768h84v72h-84q-15.3 0-25.65 10.35Q264-675.3 264-660v72q0 42-27.5 71.5T168-482v4.15Q209-474 236.5-444t27.5 72v72q0 15.3 10.35 25.65Q284.7-264 300-264h84v72h-84Z","f":"M576-192v-72h84q15.3 0 25.65-10.35Q696-284.7 696-300v-72q0-41 27.5-70.5T792-477v-4q-41-8-68.5-37T696-588v-72q0-15.3-10.35-25.65Q675.3-696 660-696h-84v-72h84q45 0 76.5 31.5T768-660v72q0 15.3 10.35 25.65Q788.7-552 804-552h60v144h-60q-15.3 0-25.65 10.35Q768-387.3 768-372v72q0 45-31.5 76.5T660-192h-84Zm-276 0q-45 0-76.5-31.5T192-300v-72q0-15.3-10.35-25.65Q171.3-408 156-408H96v-144h60q15.3 0 25.65-10.35Q192-572.7 192-588v-72q0-45 31.5-76.5T300-768h84v72h-84q-15.3 0-25.65 10.35Q264-675.3 264-660v72q0 42-27.5 71.5T168-482v4.15Q209-474 236.5-444t27.5 72v72q0 15.3 10.35 25.65Q284.7-264 300-264h84v72h-84Z"},"delete":{"vb":"0 -960 960 960","d":"M312-144q-29.7 0-50.85-21.15Q240-186.3 240-216v-480h-48v-72h192v-48h192v48h192v72h-48v479.57Q720-186 698.85-165T648-144H312Zm336-552H312v480h336v-480ZM384-288h72v-336h-72v336Zm120 0h72v-336h-72v336ZM312-696v480-480Z","f":"M312-144q-29.7 0-50.85-21.15Q240-186.3 240-216v-480h-48v-72h192v-48h192v48h192v72h-48v479.57Q720-186 698.85-165T648-144H312Zm72-144h72v-336h-72v336Zm120 0h72v-336h-72v336Z"},"do_not_disturb_on":{"vb":"0 -960 960 960","d":"M288-444h384v-72H288v72ZM480.28-96Q401-96 331-126t-122.5-82.5Q156-261 126-330.96t-30-149.5Q96-560 126-629.5q30-69.5 82.5-122T330.96-834q69.96-30 149.5-30t149.04 30q69.5 30 122 82.5T834-629.28q30 69.73 30 149Q864-401 834-331t-82.5 122.5Q699-156 629.28-126q-69.73 30-149 30Zm-.28-72q130 0 221-91t91-221q0-130-91-221t-221-91q-130 0-221 91t-91 221q0 130 91 221t221 91Zm0-312Z","f":"M288-444h384v-72H288v72ZM480.28-96Q401-96 331-126t-122.5-82.5Q156-261 126-330.96t-30-149.5Q96-560 126-629.5q30-69.5 82.5-122T330.96-834q69.96-30 149.5-30t149.04 30q69.5 30 122 82.5T834-629.28q30 69.73 30 149Q864-401 834-331t-82.5 122.5Q699-156 629.28-126q-69.73 30-149 30Z"},"done":{"vb":"0 -960 960 960","d":"M389-267 195-460l51-52 143 143 325-324 51 51-376 375Z","f":"M389-267 195-460l51-52 143 143 325-324 51 51-376 375Z"},"email":{"vb":"0 -960 960 960","d":"M168-192q-29.7 0-50.85-21.16Q96-234.32 96-264.04v-432.24Q96-726 117.15-747T168-768h624q29.7 0 50.85 21.16Q864-725.68 864-695.96v432.24Q864-234 842.85-213T792-192H168Zm312-240L168-611v347h624v-347L480-432Zm0-85 312-179H168l312 179Zm-312-94v-85 432-347Z","f":"M168-192q-29 0-50.5-21.5T96-264v-432q0-29 21.5-50.5T168-768h624q30 0 51 21.5t21 50.5v432q0 29-21 50.5T792-192H168Zm312-240 312-179v-85L480-517 168-696v85l312 179Z"},"error":{"vb":"0 -960 960 960","d":"M505.5-298.29q10.5-10.29 10.5-25.5t-10.29-25.71q-10.29-10.5-25.5-10.5t-25.71 10.29q-10.5 10.29-10.5 25.5t10.29 25.71q10.29 10.5 25.5 10.5t25.71-10.29ZM444-432h72v-240h-72v240Zm36.28 336Q401-96 331-126t-122.5-82.5Q156-261 126-330.96t-30-149.5Q96-560 126-629.5q30-69.5 82.5-122T330.96-834q69.96-30 149.5-30t149.04 30q69.5 30 122 82.5T834-629.28q30 69.73 30 149Q864-401 834-331t-82.5 122.5Q699-156 629.28-126q-69.73 30-149 30Zm-.28-72q130 0 221-91t91-221q0-130-91-221t-221-91q-130 0-221 91t-91 221q0 130 91 221t221 91Zm0-312Z","f":"M505.5-298.29q10.5-10.29 10.5-25.5t-10.29-25.71q-10.29-10.5-25.5-10.5t-25.71 10.29q-10.5 10.29-10.5 25.5t10.29 25.71q10.29 10.5 25.5 10.5t25.71-10.29ZM444-432h72v-240h-72v240Zm36.28 336Q401-96 331-126t-122.5-82.5Q156-261 126-330.96t-30-149.5Q96-560 126-629.5q30-69.5 82.5-122T330.96-834q69.96-30 149.5-30t149.04 30q69.5 30 122 82.5T834-629.28q30 69.73 30 149Q864-401 834-331t-82.5 122.5Q699-156 629.28-126q-69.73 30-149 30Z"},"forward_to_inbox":{"vb":"0 -960 960 960","d":"M480-432 168-611v347h384v72H168q-29.7 0-50.85-21.16Q96-234.32 96-264.04v-432.24Q96-726 117.15-747T168-768h624q29.7 0 50.85 21.15Q864-725.7 864-696v264h-72v-179L480-432Zm0-85 312-179H168l312 179ZM768-84l-51-51 57-57H624v-72h150l-57-57 51-51 144 144L768-84ZM168-611v381-466 85Z","f":"m768-84-51-51 57-57H624v-72h150l-57-57 51-51 144 144L768-84ZM168-192q-30 0-51-21t-21-51v-432q0-30 21-51t51-21h624q30 0 51 21t21 51v289q-25-14-52-19.5t-56-5.5q-85 0-144.5 58.5T552-230v38H168Zm312-240 312-179v-85L480-517 168-696v85l312 179Z"},"function":{"vb":"0 -960 960 960","d":"M384-240v-72h70l99-120-99-120h-55l-64 322q-8 39-35.5 62.5T237-144q-39 0-66-26.5T144-232q0-24 14-40t36-16q20 0 33 12.5t13 31.5q0 6-1.5 13t-4.5 14q2 1 3 1h3q10 0 15.5-7t8.5-21l62-308h-86v-72h100l21-106q8-39 35.5-62.5T459-816q39 0 66 26.5t27 61.5q0 24-14 40t-36 16q-20 0-33-12.5T456-716q0-6 1.5-13t4.5-14q-2-1-3-1h-3q-10 0-15.5 7t-8.5 21l-19 92h163v72h-29l53 64 53-64h-29v-72h192v72h-69L647-432l100 120h69v72H624v-72h29l-53-64-53 64h29v72H384Z","f":"M384-240v-72h70l99-120-99-120h-55l-64 322q-8 39-35.5 62.5T237-144q-39 0-66-26.5T144-232q0-24 14-40t36-16q20 0 33 12.5t13 31.5q0 6-1.5 13t-4.5 14q2 1 3 1h3q10 0 15.5-7t8.5-21l62-308h-86v-72h100l21-106q8-39 35.5-62.5T459-816q39 0 66 26.5t27 61.5q0 24-14 40t-36 16q-20 0-33-12.5T456-716q0-6 1.5-13t4.5-14q-2-1-3-1h-3q-10 0-15.5 7t-8.5 21l-19 92h163v72h-29l53 64 53-64h-29v-72h192v72h-69L647-432l100 120h69v72H624v-72h29l-53-64-53 64h29v72H384Z"},"group":{"vb":"0 -960 960 960","d":"M96-192v-92q0-25.78 12.5-47.39T143-366q54-32 114.5-49T384-432q66 0 126.5 17T625-366q22 13 34.5 34.61T672-284v92H96Zm648 0v-92q0-42-19.5-78T672-421q39 8 75.5 21.5T817-366q22 13 34.5 34.67Q864-309.65 864-284v92H744ZM282-522q-42-42-42-102t42-102q42-42 102-42t102 42q42 42 42 102t-42 102q-42 42-102 42t-102-42Zm396 0q-42 42-102 42-8 0-15-.5t-15-2.5q25-29 39.5-64.5T600-624q0-41-14.5-76.5T546-765q8-2 15-2.5t15-.5q60 0 102 42t42 102q0 60-42 102ZM168-264h432v-20q0-6.47-3.03-11.76-3.02-5.3-7.97-8.24-47-27-99-41.5T384-360q-54 0-106 14t-99 42q-4.95 2.83-7.98 7.91-3.02 5.09-3.02 12V-264Zm267-309.21q21-21.21 21-51T434.79-675q-21.21-21-51-21T333-674.79q-21 21.21-21 51T333.21-573q21.21 21 51 21T435-573.21ZM384-264Zm0-360Z","f":"M96-192v-92q0-26 12.5-47.5T143-366q54-32 114.5-49T384-432q66 0 126.5 17T625-366q22 13 34.5 34.5T672-284v92H96Zm648 0v-92q0-42-19.5-78T672-421q39 8 75.5 21.5T817-366q22 13 34.5 34.5T864-284v92H744ZM282-522q-42-42-42-102t42-102q42-42 102-42t102 42q42 42 42 102t-42 102q-42 42-102 42t-102-42Zm396 0q-42 42-102 42-8 0-15-.5t-15-2.5q25-29 39.5-64.5T600-624q0-41-14.5-76.5T546-765q8-2 15-2.5t15-.5q60 0 102 42t42 102q0 60-42 102Z"},"group_add":{"vb":"0 -960 960 960","d":"M450-483q26-30 40-66.12 14-36.12 14-74.88 0-38.41-14-74.21Q476-734 450-765q8-2 15-2.5t15-.5q60 0 102 42t42 102q0 60-42 102t-102 42q-8 0-15.5-.5T450-483Zm198 291v-92q0-41-19-76.5T576-421q68 16 130 44t62 93v92H648Zm132-240v-84h-84v-72h84v-84h72v84h84v72h-84v84h-72Zm-594-90q-42-42-42-102t42-102q42-42 102-42t102 42q42 42 42 102t-42 102q-42 42-102 42t-102-42ZM0-192v-92q0-25.41 12.5-46.7Q25-352 47-366q54-34 115.54-50 61.54-16 125-16T412-415q61 17 117 49 21 14 34 35.3 13 21.29 13 46.7v92H0Zm287.5-360q29.5 0 51-21 21.5-21.01 21.5-50.5 0-29.5-21.5-51t-51-21.5q-29.49 0-50.5 21.5-21 21.5-21 51 0 29.49 21 50.5 21.01 21 50.5 21ZM72-264h432v-20q0-6.07-3-11.03-3-4.97-8-8.97-48-26-99.5-41t-106-15q-54.5 0-106 14.5T83-304q-5 4-8 8.97-3 4.96-3 11.03v20Zm216-360Zm0 360Z","f":"M450-483q26-30 40-66t14-75q0-38-14-74t-40-67q8-2 15-2.5t15-.5q60 0 102 42t42 102q0 60-42 102t-102 42q-8 0-15.5-.5T450-483Zm198 291v-92q0-41-19-76.5T576-421q68 16 130 44t62 93v92H648Zm132-240v-84h-84v-72h84v-84h72v84h84v72h-84v84h-72Zm-594-90q-42-42-42-102t42-102q42-42 102-42t102 42q42 42 42 102t-42 102q-42 42-102 42t-102-42ZM0-192v-92q0-25 12.5-46.5T47-366q54-34 115.5-50T288-432q63 0 124 17t117 49q21 14 34 35.5t13 46.5v92H0Z"},"input":{"vb":"0 -960 960 960","d":"M168-192q-29.7 0-50.85-21.15Q96-234.3 96-264v-120h72v120h624v-432H168v120H96v-120q0-30 21.15-51T168-768h624q29.7 0 50.85 21.16Q864-725.68 864-695.96v432.24Q864-234 842.85-213T792-192H168Zm240-120-51-51 81-81H96v-72h342l-81-81 51-51 168 168-168 168Z","f":"M168-192q-29.7 0-50.85-21.15Q96-234.3 96-264v-120h72v120h624v-432H168v120H96v-120q0-30 21.15-51T168-768h624q29.7 0 50.85 21.16Q864-725.68 864-695.96v432.24Q864-234 842.85-213T792-192H168Zm240-120-51-51 81-81H96v-72h342l-81-81 51-51 168 168-168 168Z"},"mail":{"vb":"0 -960 960 960","d":"M168-192q-29.7 0-50.85-21.16Q96-234.32 96-264.04v-432.24Q96-726 117.15-747T168-768h624q29.7 0 50.85 21.16Q864-725.68 864-695.96v432.24Q864-234 842.85-213T792-192H168Zm312-240L168-611v347h624v-347L480-432Zm0-85 312-179H168l312 179Zm-312-94v-85 432-347Z","f":"M168-192q-29 0-50.5-21.5T96-264v-432q0-29 21.5-50.5T168-768h624q30 0 51 21.5t21 50.5v432q0 29-21 50.5T792-192H168Zm312-240 312-179v-85L480-517 168-696v85l312 179Z"},"menu":{"vb":"0 -960 960 960","d":"M144-264v-72h672v72H144Zm0-180v-72h672v72H144Zm0-180v-72h672v72H144Z","f":"M144-264v-72h672v72H144Zm0-180v-72h672v72H144Zm0-180v-72h672v72H144Z"},"message":{"vb":"0 -960 960 960","d":"M240-384h336v-72H240v72Zm0-132h480v-72H240v72Zm0-132h480v-72H240v72ZM96-96v-696q0-29.7 21.15-50.85Q138.3-864 168-864h624q29.7 0 50.85 21.15Q864-821.7 864-792v480q0 29.7-21.15 50.85Q821.7-240 792-240H240L96-96Zm114-216h582v-480H168v522l42-42Zm-42 0v-480 480Z","f":"M96-96v-696q0-29.7 21.15-50.85Q138.3-864 168-864h624q29.7 0 50.85 21.15Q864-821.7 864-792v480q0 29.7-21.15 50.85Q821.7-240 792-240H240L96-96Zm144-288h336v-72H240v72Zm0-132h480v-72H240v72Zm0-132h480v-72H240v72Z"},"more":{"vb":"0 -960 960 960","d":"M372-192q-16.85 0-31.92-7.5Q325-207 314-221L120-480l194-259q11-14 26.08-21.5Q355.15-768 372-768h420q29.7 0 50.85 21.16Q864-725.68 864-695.96v432.24Q864-234 842.85-213T792-192H372ZM210-480l162 216h420v-432H372L210-480Zm259.5 25.71q10.5-10.29 10.5-25.5t-10.29-25.71q-10.29-10.5-25.5-10.5t-25.71 10.29q-10.5 10.29-10.5 25.5t10.29 25.71q10.29 10.5 25.5 10.5t25.71-10.29Zm120 0q10.5-10.29 10.5-25.5t-10.29-25.71q-10.29-10.5-25.5-10.5t-25.71 10.29q-10.5 10.29-10.5 25.5t10.29 25.71q10.29 10.5 25.5 10.5t25.71-10.29Zm120 0q10.5-10.29 10.5-25.5t-10.29-25.71q-10.29-10.5-25.5-10.5t-25.71 10.29q-10.5 10.29-10.5 25.5t10.29 25.71q10.29 10.5 25.5 10.5t25.71-10.29ZM582-480Z","f":"M372-192q-16.85 0-31.92-7.5Q325-207 314-221L120-480l194-259q11-14 26.08-21.5Q355.15-768 372-768h420q29.7 0 50.85 21.16Q864-725.68 864-695.96v432.24Q864-234 842.85-213T792-192H372Zm97.5-262.29q10.5-10.29 10.5-25.5t-10.29-25.71q-10.29-10.5-25.5-10.5t-25.71 10.29q-10.5 10.29-10.5 25.5t10.29 25.71q10.29 10.5 25.5 10.5t25.71-10.29Zm120 0q10.5-10.29 10.5-25.5t-10.29-25.71q-10.29-10.5-25.5-10.5t-25.71 10.29q-10.5 10.29-10.5 25.5t10.29 25.71q10.29 10.5 25.5 10.5t25.71-10.29Zm120 0q10.5-10.29 10.5-25.5t-10.29-25.71q-10.29-10.5-25.5-10.5t-25.71 10.29q-10.5 10.29-10.5 25.5t10.29 25.71q10.29 10.5 25.5 10.5t25.71-10.29Z"},"more_vert":{"vb":"0 -960 960 960","d":"M479.79-192Q450-192 429-213.21t-21-51Q408-294 429.21-315t51-21Q510-336 531-314.79t21 51Q552-234 530.79-213t-51 21Zm0-216Q450-408 429-429.21t-21-51Q408-510 429.21-531t51-21Q510-552 531-530.79t21 51Q552-450 530.79-429t-51 21Zm0-216Q450-624 429-645.21t-21-51Q408-726 429.21-747t51-21Q510-768 531-746.79t21 51Q552-666 530.79-645t-51 21Z","f":"M479.79-192Q450-192 429-213.21t-21-51Q408-294 429.21-315t51-21Q510-336 531-314.79t21 51Q552-234 530.79-213t-51 21Zm0-216Q450-408 429-429.21t-21-51Q408-510 429.21-531t51-21Q510-552 531-530.79t21 51Q552-450 530.79-429t-51 21Zm0-216Q450-624 429-645.21t-21-51Q408-726 429.21-747t51-21Q510-768 531-746.79t21 51Q552-666 530.79-645t-51 21Z"},"open_in_new":{"vb":"0 -960 960 960","d":"M216-144q-29.7 0-50.85-21.15Q144-186.3 144-216v-528q0-29.7 21.15-50.85Q186.3-816 216-816h264v72H216v528h528v-264h72v264q0 29.7-21.15 50.85Q773.7-144 744-144H216Zm171-192-51-51 357-357H576v-72h240v240h-72v-117L387-336Z","f":"M216-144q-29.7 0-50.85-21.15Q144-186.3 144-216v-528q0-29.7 21.15-50.85Q186.3-816 216-816h264v72H216v528h528v-264h72v264q0 29.7-21.15 50.85Q773.7-144 744-144H216Zm171-192-51-51 357-357H576v-72h240v240h-72v-117L387-336Z"},"outgoing_mail":{"vb":"0 -960 960 960","d":"m723-192-51-51 56-57H576v-72h152l-56-57 51-51 141 144-141 144Zm-555-96q-29.7 0-50.85-21.15Q96-330.3 96-360v-384q0-29.7 21.15-50.85Q138.3-816 168-816h479.57Q678-816 699-794.85T720-744l1 168q-19 1-37.5 3.5T648-565v-129L408-528 168-694v334h313q-1 4-1 10v14q0 10 2 24t4 24H168Zm55-456 185 129 185-129H223Zm-55 384v-384 384Z","f":"m723-192-51-51 56-57H576v-72h152l-56-57 51-51 141 144-141 144ZM408-528l240-134v-82L408-610 168-744v82l240 134ZM168.4-288q-29.92 0-51.16-21.12Q96-330.24 96-360v-384q0-29.76 21.12-50.88T168-816h480q29.76 0 50.88 21.12T720-744v168q-99 0-169.5 70T480-336q0 12 1.5 24t4.5 24H168.4Z"},"preview":{"vb":"0 -960 960 960","d":"M216-144q-29.7 0-50.85-21.15Q144-186.3 144-216v-528q0-29.7 21.15-50.85Q186.3-816 216-816h528q29.7 0 50.85 21.15Q816-773.7 816-744v528q0 29.7-21.15 50.85Q773.7-144 744-144H216Zm0-72h528v-456H216v456Zm132-124.5Q290-381 264-444q26-63 84.12-103.5 58.11-40.5 132-40.5Q554-588 612-547.5T696-444q-26 63-84.12 103.5-58.11 40.5-132 40.5Q406-300 348-340.5Zm227.88-32.94Q618.76-398.88 643-444q-24.24-45.12-67.12-70.56Q533-540 480-540q-53 0-95.88 25.44Q341.24-489.12 317-444q24.24 45.12 67.12 70.56Q427-348 480-348q53 0 95.88-25.44ZM480-444Zm42.5 42.5Q540-419 540-444t-17.5-42.5Q505-504 480-504t-42.5 17.5Q420-469 420-444t17.5 42.5Q455-384 480-384t42.5-17.5Z","f":"M216-144q-29.7 0-50.85-21.15Q144-186.3 144-216v-528q0-29.7 21.15-50.85Q186.3-816 216-816h528q29.7 0 50.85 21.15Q816-773.7 816-744v528q0 29.7-21.15 50.85Q773.7-144 744-144H216Zm0-72h528v-456H216v456Zm132-124.5Q290-381 264-444q26-63 84.12-103.5 58.11-40.5 132-40.5Q554-588 612-547.5T696-444q-26 63-84.12 103.5-58.11 40.5-132 40.5Q406-300 348-340.5Zm89.5-61Q420-419 420-444t17.5-42.5Q455-504 480-504t42.5 17.5Q540-469 540-444t-17.5 42.5Q505-384 480-384t-42.5-17.5Zm102 17.2q24.5-24.31 24.5-59.5 0-35.2-24.3-59.7-24.31-24.5-59.5-24.5-35.2 0-59.7 24.3-24.5 24.31-24.5 59.5 0 35.2 24.3 59.7 24.31 24.5 59.5 24.5 35.2 0 59.7-24.3Z"},"refresh":{"vb":"0 -960 960 960","d":"M480-192q-120 0-204-84t-84-204q0-120 84-204t204-84q65 0 120.5 27t95.5 72v-99h72v240H528v-72h131q-29-44-76-70t-103-26q-90 0-153 63t-63 153q0 90 63 153t153 63q84 0 144-55.5T693-456h74q-9 112-91 188t-196 76Z","f":"M480-192q-120 0-204-84t-84-204q0-120 84-204t204-84q65 0 120.5 27t95.5 72v-99h72v240H528v-72h131q-29-44-76-70t-103-26q-90 0-153 63t-63 153q0 90 63 153t153 63q84 0 144-55.5T693-456h74q-9 112-91 188t-196 76Z"},"reply":{"vb":"0 -960 960 960","d":"M744-210v-144q0-50-35-85t-85-35H282l123 123-51 51-210-210 210-210 51 51-123 123h342q80 0 136 56t56 136v144h-72Z","f":"M744-210v-144q0-50-35-85t-85-35H282l123 123-51 51-210-210 210-210 51 51-123 123h342q80 0 136 56t56 136v144h-72Z"},"save":{"vb":"0 -960 960 960","d":"M816-672v456q0 29.7-21.15 50.85Q773.7-144 744-144H216q-29.7 0-50.85-21.15Q144-186.3 144-216v-528q0-29.7 21.15-50.85Q186.3-816 216-816h456l144 144Zm-72 30L642-744H216v528h528v-426ZM556.5-283.5Q588-315 588-360t-31.5-76.5Q525-468 480-468t-76.5 31.5Q372-405 372-360t31.5 76.5Q435-252 480-252t76.5-31.5ZM264-552h336v-144H264v144Zm-48-77v413-528 115Z","f":"M816-672v456q0 29.7-21.15 50.85Q773.7-144 744-144H216q-29.7 0-50.85-21.15Q144-186.3 144-216v-528q0-29.7 21.15-50.85Q186.3-816 216-816h456l144 144ZM556.5-283.5Q588-315 588-360t-31.5-76.5Q525-468 480-468t-76.5 31.5Q372-405 372-360t31.5 76.5Q435-252 480-252t76.5-31.5ZM264-552h336v-144H264v144Z"},"schedule":{"vb":"0 -960 960 960","d":"m614-310 51-51-149-149v-210h-72v240l170 170ZM480-96q-79.38 0-149.19-30T208.5-208.5Q156-261 126-330.96t-30-149.5Q96-560 126-630q30-70 82.5-122t122.46-82q69.96-30 149.5-30t149.55 30.24q70 30.24 121.79 82.08 51.78 51.84 81.99 121.92Q864-559.68 864-480q0 79.38-30 149.19T752-208.5Q700-156 629.87-126T480-96Zm0-384Zm.48 312q129.47 0 220.5-91.5Q792-351 792-480.48q0-129.47-91.02-220.5Q609.95-792 480.48-792 351-792 259.5-700.98 168-609.95 168-480.48 168-351 259.5-259.5T480.48-168Z","f":"m614-310 51-51-149-149v-210h-72v240l170 170ZM480-96q-79.38 0-149.19-30T208.5-208.5Q156-261 126-330.96t-30-149.5Q96-560 126-630q30-70 82.5-122t122.46-82q69.96-30 149.5-30t149.55 30.24q70 30.24 121.79 82.08 51.78 51.84 81.99 121.92Q864-559.68 864-480q0 79.38-30 149.19T752-208.5Q700-156 629.87-126T480-96Z"},"schedule_send":{"vb":"0 -960 960 960","d":"M144-192v-576l542 216q-40 0-67 5.5T557-525L216-661v109l216 72-216 72v109l210-83q-8 20-12.5 41.5T408-298L144-192Zm392 40q-56-56-56-136t56-136q56-56 136-56t136 56q56 56 56 136t-56 136q-56 56-136 56t-136-56Zm191-47 34-34-65-65v-86h-48v106l79 79ZM216-408v-253 362-109Z","f":"M144-192v-192l288-96-288-96v-192l542 216h-14q-107 0-184 73.5T408-298L144-192Zm392 39.77q-56-56.22-56-136Q480-368 536.23-424q56.22-56 136-56Q752-480 808-423.77q56 56.22 56 136Q864-208 807.77-152q-56.22 56-136 56Q592-96 536-152.23ZM727-199l34-34-65-65v-86h-48v106l79 79Z"},"science":{"vb":"0 -960 960 960","d":"M216-144q-46 0-66-40.5t8.98-75.71L360-504v-240h-35.79q-15.21 0-25.71-10.29t-10.5-25.5q0-15.21 10.35-25.71T324-816h312q15.3 0 25.65 10.29Q672-795.42 672-780.21t-10.35 25.71Q651.3-744 636-744h-36v240l201 244q28 35 8 75.5T744-144H216Zm0-72h528L528-480v-264h-96v264L216-216Zm265-264Z","f":"M216-144q-46 0-66-40.5t8.98-75.71L360-504v-240h-35.79q-15.21 0-25.71-10.29t-10.5-25.5q0-15.21 10.35-25.71T324-816h312q15.3 0 25.65 10.29Q672-795.42 672-780.21t-10.35 25.71Q651.3-744 636-744h-36v240l201 244q28 35 8 75.5T744-144H216Z"},"send":{"vb":"0 -960 960 960","d":"M144-192v-576l720 288-720 288Zm72-107 454-181-454-181v109l216 72-216 72v109Zm0 0v-362 362Z","f":"M144-192v-192l288-96-288-96v-192l720 288-720 288Z"},"settings":{"vb":"0 -960 960 960","d":"m403-96-22-114q-23-9-44.5-21T296-259l-110 37-77-133 87-76q-2-12-3-24t-1-25q0-13 1-25t3-24l-87-76 77-133 110 37q19-16 40.5-28t44.5-21l22-114h154l22 114q23 9 44.5 21t40.5 28l110-37 77 133-87 76q2 12 3 24t1 25q0 13-1 25t-3 24l87 76-77 133-110-37q-19 16-40.5 28T579-210L557-96H403Zm59-72h36l19-99q38-7 71-26t57-48l96 32 18-30-76-67q6-17 9.5-35.5T696-480q0-20-3.5-38.5T683-554l76-67-18-30-96 32q-24-29-57-48t-71-26l-19-99h-36l-19 99q-38 7-71 26t-57 48l-96-32-18 30 76 67q-6 17-9.5 35.5T264-480q0 20 3.5 38.5T277-406l-76 67 18 30 96-32q24 29 57 48t71 26l19 99Zm18-168q60 0 102-42t42-102q0-60-42-102t-102-42q-60 0-102 42t-42 102q0 60 42 102t102 42Zm0-144Z","f":"m403-96-22-114q-23-9-44.5-21T296-259l-110 37-77-133 87-76q-2-12-3-24t-1-25q0-13 1-25t3-24l-87-76 77-133 110 37q19-16 40.5-28t44.5-21l22-114h154l22 114q23 9 44.5 21t40.5 28l110-37 77 133-87 76q2 12 3 24t1 25q0 13-1 25t-3 24l87 76-77 133-110-37q-19 16-40.5 28T579-210L557-96H403Zm77-240q60 0 102-42t42-102q0-60-42-102t-102-42q-60 0-102 42t-42 102q0 60 42 102t102 42Z"},"smartphone":{"vb":"0 -960 960 960","d":"M288-48q-29.7 0-50.85-21.15Q216-90.3 216-120v-720q0-33 19.5-52.5T288-912h384q29.7 0 50.85 21.15Q744-869.7 744-840v144q20 0 34 14t14 34v96q0 20-14 34t-34 14v384q0 29.7-21.15 50.85Q701.7-48 672-48H288Zm0-72h384v-720H288v720Zm0 0v-720 720Zm217.5-610.29q10.5-10.29 10.5-25.5t-10.29-25.71q-10.29-10.5-25.5-10.5t-25.71 10.29q-10.5 10.29-10.5 25.5t10.29 25.71q10.29 10.5 25.5 10.5t25.71-10.29Z","f":"M288-48q-30 0-51-21t-21-51v-720q0-33 19.5-52.5T288-912h384q30 0 51 21t21 51v144q20 0 34 14t14 34v96q0 20-14 34t-34 14v384q0 30-21 51t-51 21H288Zm217.5-682.5Q516-741 516-756t-10.5-25.5Q495-792 480-792t-25.5 10.5Q444-771 444-756t10.5 25.5Q465-720 480-720t25.5-10.5Z"},"stop_circle":{"vb":"0 -960 960 960","d":"M336-336h288v-288H336v288ZM480.28-96Q401-96 331-126t-122.5-82.5Q156-261 126-330.96t-30-149.5Q96-560 126-629.5q30-69.5 82.5-122T330.96-834q69.96-30 149.5-30t149.04 30q69.5 30 122 82.5T834-629.28q30 69.73 30 149Q864-401 834-331t-82.5 122.5Q699-156 629.28-126q-69.73 30-149 30Zm-.28-72q130 0 221-91t91-221q0-130-91-221t-221-91q-130 0-221 91t-91 221q0 130 91 221t221 91Zm0-312Z","f":"M336-336h288v-288H336v288ZM480.28-96Q401-96 331-126t-122.5-82.5Q156-261 126-330.96t-30-149.5Q96-560 126-629.5q30-69.5 82.5-122T330.96-834q69.96-30 149.5-30t149.04 30q69.5 30 122 82.5T834-629.28q30 69.73 30 149Q864-401 834-331t-82.5 122.5Q699-156 629.28-126q-69.73 30-149 30Z"},"subject":{"vb":"0 -960 960 960","d":"M192-240v-72h336v72H192Zm0-144v-72h576v72H192Zm0-144v-72h576v72H192Zm0-144v-72h576v72H192Z","f":"M192-240v-72h336v72H192Zm0-144v-72h576v72H192Zm0-144v-72h576v72H192Zm0-144v-72h576v72H192Z"},"task_alt":{"vb":"0 -960 960 960","d":"M480-96q-79 0-149-30t-122.5-82.5Q156-261 126-331T96-480q0-80 30-149.5t82.5-122Q261-804 331-834t149-30q63 0 120 19t105 54l-52 52q-37-26-81-39.5T480-792q-130 0-221 91t-91 221q0 130 91 221t221 91q130 0 221-91t91-221q0-21-3-41.5t-8-40.5l57-57q13 32 19.5 67t6.5 72q0 79-30 149t-82.5 122.5Q699-156 629.5-126T480-96Zm-55-211L264-468l52-52 110 110 387-387 51 51-439 439Z","f":"M480-96q-79 0-149-30t-122.5-82.5Q156-261 126-331T96-480q0-80 30-149.5t82.5-122Q261-804 331-834t149-30q63 0 120 19t105 54l-52 52q-37-26-81-39.5T480-792q-130 0-221 91t-91 221q0 130 91 221t221 91q130 0 221-91t91-221q0-21-3-41.5t-8-40.5l57-57q13 32 19.5 67t6.5 72q0 79-30 149t-82.5 122.5Q699-156 629.5-126T480-96Zm-55-211L264-468l52-52 110 110 387-387 51 51-439 439Z"},"toast":{"vb":"0 -960 960 960","d":"M264-264h432v-72H264v72Zm-48 120q-29.7 0-50.85-21.15Q144-186.3 144-216v-528q0-29.7 21.15-50.85Q186.3-816 216-816h528q29.7 0 50.85 21.15Q816-773.7 816-744v528q0 29.7-21.15 50.85Q773.7-144 744-144H216Zm0-72h528v-528H216v528Zm0-528v528-528Z","f":"M264-264h432v-72H264v72Zm-48 120q-29.7 0-50.85-21.15Q144-186.3 144-216v-528q0-29.7 21.15-50.85Q186.3-816 216-816h528q29.7 0 50.85 21.15Q816-773.7 816-744v528q0 29.7-21.15 50.85Q773.7-144 744-144H216Z"},"upload_file":{"vb":"0 -960 960 960","d":"M444-240h72v-150l57 57 51-51-144-144-144 144 51 51 57-57v150ZM263.72-96Q234-96 213-117.15T192-168v-624q0-29.7 21.15-50.85Q234.3-864 264-864h312l192 192v504q0 29.7-21.16 50.85Q725.68-96 695.96-96H263.72ZM528-624v-168H264v624h432v-456H528ZM264-792v189-189 624-624Z","f":"M444-240h72v-150l57 57 51-51-144-144-144 144 51 51 57-57v150ZM263.72-96Q234-96 213-117.15T192-168v-624q0-29.7 21.15-50.85Q234.3-864 264-864h312l192 192v504q0 29.7-21.16 50.85Q725.68-96 695.96-96H263.72ZM528-624h168L528-792v168Z"},"warning":{"vb":"0 -960 960 960","d":"m48-144 432-720 432 720H48Zm127-72h610L480-724 175-216Zm330.5-58.29q10.5-10.29 10.5-25.5t-10.29-25.71q-10.29-10.5-25.5-10.5t-25.71 10.29q-10.5 10.29-10.5 25.5t10.29 25.71q10.29 10.5 25.5 10.5t25.71-10.29ZM444-384h72v-192h-72v192Zm36-86Z","f":"m48-144 432-720 432 720H48Zm457.5-130.29q10.5-10.29 10.5-25.5t-10.29-25.71q-10.29-10.5-25.5-10.5t-25.71 10.29q-10.5 10.29-10.5 25.5t10.29 25.71q10.29 10.5 25.5 10.5t25.71-10.29ZM444-384h72v-192h-72v192Z"}};
+  function ic(name, cls, title) {
+    var i = ICONS[name];
+    if (!i) return '';
+    return '<svg class="ms' + (cls ? ' ' + cls : '') + '" viewBox="' + i.vb + '" aria-hidden="' + (title ? 'false' : 'true') + '">' +
+      (title ? '<title>' + esc(title) + '</title>' : '') +
+      '<path class="o" d="' + i.d + '"/><path class="f" d="' + i.f + '"/></svg>';
+  }
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -271,7 +389,7 @@
   }
   function $(sel, root) { return (root || document).querySelector(sel); }
   function $all(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
-
+  function plural(n, one, many) { return n + ' ' + (n === 1 ? one : (many || one + 's')); }
   function store(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
   function load(k) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
 
@@ -281,41 +399,45 @@
     if (!t) { t = document.createElement('div'); t.className = 'toast'; document.body.appendChild(t); }
     t.textContent = msg;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, ms || 3800);
+    toastTimer = setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, ms || 4000);
   }
 
+  // opts: { title, html, actions: [{ label, cls, onClick(root, btn) -> bool keepOpen | Promise<bool> }] }
   function modal(opts) {
-    // opts: { title, html, actions: [{label, cls, onClick -> bool|Promise}] }
-    var scrim = document.createElement('div');
-    scrim.className = 'scrim';
-    scrim.innerHTML = '<div class="modal" role="dialog" aria-modal="true"><header>' + esc(opts.title) + '</header>' +
-      '<div class="content">' + opts.html + '</div><footer></footer></div>';
-    var footer = $('footer', scrim);
-    function close() { if (scrim.parentNode) scrim.parentNode.removeChild(scrim); document.removeEventListener('keydown', onKey); }
+    var wrap = document.createElement('div');
+    wrap.innerHTML = '<div class="scrim"></div><div class="modal-wrap"><div class="modal" role="dialog" aria-modal="true" style="max-width:' + (opts.width || 560) + 'px">' +
+      '<header>' + esc(opts.title) + '</header><div class="content">' + opts.html + '</div><footer></footer></div></div>';
+    var footer = $('footer', wrap);
+    function close() { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); document.removeEventListener('keydown', onKey); }
     function onKey(e) { if (e.key === 'Escape') close(); }
-    (opts.actions || [{ label: 'Close', cls: 'ghost' }]).forEach(function (a) {
+    (opts.actions || [{ label: 'Close', cls: 'text' }]).forEach(function (a) {
       var b = document.createElement('button');
       b.className = 'btn ' + (a.cls || '');
       b.textContent = a.label;
       b.addEventListener('click', function () {
         if (!a.onClick) return close();
-        var r = a.onClick(scrim, b);
+        var r = a.onClick(wrap, b);
         if (r && typeof r.then === 'function') {
           $all('button', footer).forEach(function (x) { x.disabled = true; });
           r.then(function (keep) { if (!keep) close(); else $all('button', footer).forEach(function (x) { x.disabled = false; }); })
-           .catch(function (err) { $all('button', footer).forEach(function (x) { x.disabled = false; }); toast(err.message, 6000); });
+           .catch(function (err) { $all('button', footer).forEach(function (x) { x.disabled = false; }); toast(err.message, 7000); });
         } else if (!r) close();
       });
       footer.appendChild(b);
     });
-    scrim.addEventListener('mousedown', function (e) { if (e.target === scrim) close(); });
+    $('.modal-wrap', wrap).addEventListener('mousedown', function (e) { if (e.target === e.currentTarget) close(); });
     document.addEventListener('keydown', onKey);
-    document.body.appendChild(scrim);
-    var f = $('input, textarea', scrim); if (f) f.focus();
-    return { el: scrim, close: close };
+    document.body.appendChild(wrap);
+    var f = $('textarea, input', wrap); if (f) f.focus();
+    return { el: wrap, close: close };
+  }
+  function confirmBox(title, text, label, fn) {
+    return modal({ title: title, html: '<p style="margin:0">' + text + '</p>', actions: [
+      { label: 'Cancel', cls: 'text' }, { label: label, cls: 'primary', onClick: fn }
+    ] });
   }
 
-  // ───── Recipients (mirrors parseRecipientInput_ on the server) ─────
+  // ───── Recipients & placeholders (mirror the server) ─────
   function parseRecipients(text) {
     var re = /(?:"([^"]*)"|([^<>,;\n"]*?))\s*<\s*([^<>\s,;]+@[^<>\s,;]+)\s*>|([^\s<>,;"]+@[^\s<>,;"]+)/g;
     var out = [], seen = {}, m, s = String(text || '');
@@ -330,7 +452,7 @@
   }
   function firstNameOf(name) {
     var n = String(name || '');
-    if (n.indexOf(',') !== -1) n = n.slice(n.indexOf(',') + 1); // "Doe, Jane"
+    if (n.indexOf(',') !== -1) n = n.slice(n.indexOf(',') + 1);
     var first = n.replace(/[",]/g, ' ').trim().split(/\s+/)[0] || '';
     return first.indexOf('@') === -1 ? first : '';
   }
@@ -340,28 +462,20 @@
       .replace(/\{senderFirstName\}/g, B.me.firstName || '');
   }
   function withSignature(body) {
-    var sig = B.signature || '';
-    var t = String(body || '').replace(/\s+$/, '');
-    if (!sig) return t;
-    if (t.slice(-sig.length) === sig) return t;
+    var sig = B.signature || '', t = String(body || '').replace(/\s+$/, '');
+    if (!sig || t.slice(-sig.length) === sig) return t;
     return (t ? t + '\n\n' : '') + sig;
   }
 
   // ───── Composer model ─────
-  function newStep(prev) {
-    return { amount: prev ? 4 : 3, unit: 'days', atTime: '', condition: 'no_reply', message: '' };
-  }
+  function newStep(prev) { return { amount: prev ? 4 : 3, unit: 'days', atTime: '', condition: 'no_reply', message: '' }; }
   function blankDraft(mode) {
     return { mode: mode, name: '', originalName: '', recipients: '', subject: '', body: '', followUps: [],
-             campaignName: '', cc: '', bcc: '', tz: B.tz };
+             campaignName: '', cc: '', bcc: '', showCc: false, tz: B.tz };
   }
-  // Quick cadences (default bump message), as relative waits.
   var PRESETS = [['3-7-14', [3, 4, 7]], ['1-3-7', [1, 2, 4]], ['2-5-10', [2, 3, 5]]];
-  function presetSteps(waits) {
-    return waits.map(function (n) { return { amount: n, unit: 'days', atTime: '', condition: 'no_reply', message: '' }; });
-  }
-  // What the server expects: exact-date steps carry sendAtAbs (picked wall
-  // clock as UTC ms); everything else waits relative to the previous email.
+  function presetSteps(waits) { return waits.map(function (n) { return { amount: n, unit: 'days', atTime: '', condition: 'no_reply', message: '' }; }); }
+  // Exact-date steps carry sendAtAbs (picked wall clock as UTC ms); the rest wait after the previous email.
   function stepsPayload(list) {
     return list.map(function (s) {
       var o = { amount: s.amount, unit: s.unit, atTime: s.atTime || '', condition: s.condition, message: s.message || '',
@@ -384,272 +498,312 @@
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T09:00';
   }
   function persistDraft() { if (draft && draft.mode === 'campaign') store(DRAFT_KEY, draft); }
-
+  function timeLabel(v) { for (var i = 0; i < B.atTimes.length; i++) if (B.atTimes[i].value === v) return B.atTimes[i].label; return v; }
+  function condLabel(v) { return v === 'replied' ? 'If replied' : v === 'always' ? 'No matter what' : 'If no reply'; }
   function waitLabel(s) {
-    if (s.unit === 'date') return s.sendAtLocal ? 'on ' + s.sendAtLocal.replace('T', ' at ') : 'pick a date';
+    if (s.unit === 'date') return s.sendAtLocal ? s.sendAtLocal.replace('T', ' at ') : 'pick a date';
     var u = s.amount === 1 ? s.unit.replace(/s$/, '') : s.unit;
-    return s.amount + ' ' + u + (s.atTime ? ' · ' + timeLabel(s.atTime) : '');
+    return s.amount + ' ' + u + (s.atTime ? ', ' + timeLabel(s.atTime) : '');
   }
-  function timeLabel(v) {
-    for (var i = 0; i < B.atTimes.length; i++) if (B.atTimes[i].value === v) return B.atTimes[i].label;
-    return v;
-  }
-  function condLabel(v) { return v === 'replied' ? 'If replied' : v === 'always' ? 'Always' : 'If no reply'; }
   function describe(steps) {
-    var n = steps.length;
-    if (!n) return 'No follow-ups';
-    var head = n + (n === 1 ? ' follow-up' : ' follow-ups');
-    var allDays = steps.every(function (s) { return s.unit === 'days'; });
-    if (allDays) { var d = 0; return head + ' · day ' + steps.map(function (s) { d += s.amount; return d; }).join(', '); }
-    return head + ' · ' + steps.map(function (s) { return s.unit === 'date' ? 'date' : s.amount + s.unit.charAt(0); }).join(' → ');
+    if (!steps.length) return 'No follow-ups';
+    var allDays = steps.every(function (s) { return s.unit === 'days'; }), d = 0;
+    return plural(steps.length, 'follow-up') + (allDays ? ' · day ' + steps.map(function (s) { d += s.amount; return d; }).join(', ') : '');
   }
 
   // ───── Router ─────
-  // In-page routing. Apps Script's sandboxed iframe doesn't reliably support
-  // hash navigation, so the current page lives in a variable.
-  var current = 'campaigns';
-  function go(h) { current = String(h || '').replace(/^#/, '') || 'campaigns'; window.scrollTo(0, 0); route(); }
+  // The page lives in Apps Script's sandboxed iframe, where hash navigation
+  // isn't reliable, so the route is a variable.
+  function go(h) {
+    current = String(h || '').replace(/^#/, '') || 'campaigns';
+    $('#scroll').scrollTop = 0;
+    route();
+  }
   function route() {
-    var h = current;
-    var parts = h.split('/');
-    var page = parts[0];
-    $all('[data-nav]').forEach(function (a) {
-      var nav = a.getAttribute('data-nav');
-      var on = nav === page || (page === 'sequence' && nav === 'sequences') || (page === 'thread' && nav === 'threads');
-      a.classList.toggle('active', on);
-    });
     closeMenus();
+    var parts = current.split('/'), page = parts[0], rest = decodeURIComponent(parts.slice(1).join('/'));
+    renderRail(page);
+    // The composer needs the width; Mailmeteor's has no side panel either.
+    document.body.classList.toggle('composing', page === 'new' || page === 'thread' || page === 'sequence');
     if (page === 'new') return pageCompose('campaign');
-    if (page === 'sequences') return pageSequences();
-    if (page === 'sequence') return pageCompose('sequence', decodeURIComponent(parts.slice(1).join('/')));
-    if (page === 'settings') return pageSettings();
+    if (page === 'campaign') return pageReport(rest);
     if (page === 'threads') return pageThreads();
-    if (page === 'thread') return pageThread(parts.slice(1).join('/'));
+    if (page === 'thread') return pageThread(rest);
+    if (page === 'sequences') return pageSequences();
+    if (page === 'sequence') return pageCompose('sequence', rest);
+    if (page === 'settings') return pageSettings();
     return pageCampaigns();
   }
+  function navOf(page) {
+    return { campaign: 'campaigns', thread: 'threads', sequence: 'sequences', 'new': 'campaigns' }[page] || page;
+  }
+  var NAV = [['campaigns', 'send', 'Campaigns'], ['threads', 'forward_to_inbox', 'Follow up a sent email'],
+             ['sequences', 'account_tree', 'Sequences'], ['settings', 'settings', 'Settings']];
 
-  function renderChrome() {
-    $('#who').textContent = B.me.email || '';
-    var h = B.health;
-    $('#status').innerHTML = h.running
-      ? '<span class="dot"></span>Scheduler running · checks every ' + h.interval + ' min' + (h.lastRunAgo ? ' · last ' + esc(h.lastRunAgo) + ' ago' : '')
-      : '<span class="dot bad"></span><b style="color:var(--bad)">Scheduler not running — follow-ups won\'t send</b>';
+  function renderRail(page) {
+    var on = navOf(page), h = B.health;
+    var recent = B.campaignList.slice(0, 6);
+    $('#rail').innerHTML =
+      '<div class="rail-head"><div class="logo">' + ic('schedule_send') + '</div><div><b>Follow-ups</b><small>' + esc(B.me.email) + '</small></div></div>' +
+      '<div class="rail-body">' +
+      '<button class="btn primary rail-new" data-go="new">' + ic('add') + 'New campaign</button>' +
+      '<nav class="nav">' + NAV.map(function (n) {
+        return '<a href="#' + n[0] + '" class="' + (on === n[0] ? 'on' : '') + '">' + ic(n[1]) + esc(n[2]) + '</a>';
+      }).join('') + '</nav>' +
+      '<h4>Recent campaigns' + (B.campaignList.length > 6 ? '<a href="#campaigns">See all</a>' : '') + '</h4>' +
+      (recent.length ? recent.map(function (c) {
+        return '<div class="rc" data-go="campaign/' + esc(encodeURIComponent(c.id)) + '">' + ic('mail') +
+          '<span class="t" title="' + esc(c.name) + '">' + esc(c.name) + '</span>' + statusPill(c.status) + '</div>';
+      }).join('') : '<div class="rail-empty">Nothing sent yet.</div>') +
+      '<div class="health"><div class="row1"><span class="dot' + (h.running ? '' : ' bad') + '"></span><b>' +
+        (h.running ? 'Follow-ups are on' : 'Follow-ups are paused') + '</b></div>' +
+        (h.running ? 'Checks every ' + h.interval + ' min' + (h.lastRunAgo ? ' · last ' + esc(h.lastRunAgo) + ' ago' : '') + '.'
+                   : 'Nothing will send until you fix this. <a href="#settings">Fix it</a>') +
+      '</div></div>';
+    $('#mnav').innerHTML = NAV.map(function (n) {
+      return '<a class="btn sm' + (on === n[0] ? ' primary' : '') + '" href="#' + n[0] + '">' + esc(n[2].replace('Follow up a sent email', 'Sent emails')) + '</a>';
+    }).join('');
+    renderFoot();
+  }
+  function renderFoot() {
+    var h = B.health, queued = B.campaigns.reduce(function (n, c) { return n + c.stepCount; }, 0);
+    $('#foot').innerHTML = '<span class="dot' + (h.running ? '' : ' bad') + '"></span>' +
+      '<span>Sending as ' + esc(B.me.email) + '</span><span class="hide-sm">' + plural(queued, 'follow-up') + ' queued' +
+      (B.campaigns[0] ? ' · next ' + esc(B.campaigns[0].nextLabel) : '') + '</span><span class="grow"></span>' +
+      '<a href="#settings">Settings</a>' + (B.dryRun ? '<span class="pill stopped">Test mode</span>' : '');
+  }
+  function statusPill(s) {
+    var label = { active: 'active', ended: 'ended', stopped: 'stopped', replied: 'replied', completed: 'done', missing: 'deleted' }[s] || s;
+    return '<span class="pill ' + esc(s) + '">' + esc(label) + '</span>';
   }
 
   function healthBanner() {
     var h = B.health, out = '';
     if (!h.running) {
-      out += '<div class="banner bad"><div><b>Follow-ups are paused.</b> The scheduler isn\'t installed for ' + esc(h.account || 'this account') +
-        (h.installError ? ' — ' + esc(h.installError) : '') + '.</div><button class="btn primary sm" data-act="fix">Fix it</button></div>';
+      out += '<div class="banner bad">' + ic('error') + '<div><b>Follow-ups are paused.</b> The scheduler isn\'t set up for ' + esc(h.account || 'this account') +
+        (h.installError ? ' (' + esc(h.installError) + ')' : '') + '.</div><button class="btn sm primary" data-act="fix">Fix it</button></div>';
     }
     if (h.lastRunErrors && h.lastRunErrors.length) {
-      out += '<div class="banner warn"><div><b>Last check had ' + h.lastRunErrors.length + ' failed send(s):</b> ' + esc(h.lastRunErrors[0]) + '</div></div>';
+      out += '<div class="banner warn">' + ic('warning') + '<div><b>' + plural(h.lastRunErrors.length, 'follow-up') + ' failed on the last check:</b> ' + esc(h.lastRunErrors[0]) + '</div></div>';
     }
-    if (B.dryRun) out += '<div class="banner warn"><div><b>Dry run is on</b> (CONFIG.dryRun). Nothing will actually send.</div></div>';
+    if (B.dryRun) out += '<div class="banner warn">' + ic('science') + '<div><b>Test mode is on</b> (CONFIG.dryRun). Nothing will actually be sent.</div></div>';
     return out;
   }
+  function setState(s) { B.campaigns = s.campaigns; B.campaignList = s.campaignList; if (s.health) B.health = s.health; }
+  function refreshState() { return call('studioState').then(function (s) { setState(s); return s; }); }
 
-  // ───── Campaigns page ─────
+  // ───── Campaigns list ─────
   function pageCampaigns() {
-    var rows = B.campaigns;
-    var html = '<div class="page-head"><h1>Campaigns</h1><div class="actions">' +
-      '<button class="btn" data-act="refresh">Refresh</button>' +
-      '<a class="btn primary" href="#new">' + I.plus + 'New campaign</a></div></div>' + healthBanner();
-    if (!rows.length) {
-      html += '<div class="card empty"><h2>No follow-ups scheduled</h2><p>Write an email, add a sequence of follow-ups, and send. ' +
-        'They stop automatically when someone replies.</p><a class="btn primary" href="#new">' + I.plus + 'New campaign</a></div>';
-    } else {
-      html += '<div class="card"><table><thead><tr><th>Email</th><th>To</th><th>Queued</th><th>Next send</th><th></th></tr></thead><tbody>' +
-        rows.map(function (c) {
-          return '<tr><td><a href="#thread/' + esc(c.threadId) + '" style="color:inherit;text-decoration:none"><div>' + esc(c.subject) + '</div></a>' + (c.campaignName ? '<div class="sub">' + esc(c.campaignName) + '</div>' : '') + '</td>' +
-            '<td class="sub">' + esc(c.recipient) + '</td>' +
-            '<td><span class="pill">' + c.stepCount + ' left</span></td>' +
-            '<td>' + esc(c.nextLabel) + '</td>' +
-            '<td class="right"><a class="btn ghost sm" href="#thread/' + esc(c.threadId) + '">View</a> ' +
-            '<button class="btn danger sm" data-act="cancel" data-id="' + esc(c.threadId) + '">Stop</button></td></tr>';
-        }).join('') + '</tbody></table></div>';
-    }
-    $('#page').innerHTML = html;
-  }
-
-  // ───── Sequences page ─────
-  function pageSequences() {
-    var seqs = B.sequences;
-    var html = '<div class="page-head"><h1>Sequences</h1><div class="actions">' +
-      '<a class="btn primary" href="#sequence/">' + I.plus + 'New sequence</a></div></div>';
-    if (!seqs.length) {
-      html += '<div class="card empty"><h2>No sequences yet</h2><p>A sequence is your follow-up emails, written once. ' +
-        'Load it into any campaign — or start it on a Gmail thread from the sidebar — with one click.</p>' +
-        '<a class="btn primary" href="#sequence/">' + I.plus + 'Create a sequence</a></div>';
-    } else {
-      html += '<div class="grid">' + seqs.map(function (s, i) {
-        var prev = (s.steps[0] && s.steps[0].message) || s.firstMessage || '';
-        return '<div class="card seq-card"><h3>' + esc(s.name) + '</h3>' +
-          '<div class="meta">' + esc(describe(s.steps)) + '</div>' +
-          '<div class="preview">' + esc(prev.replace(/\s+/g, ' ')) + '</div>' +
-          '<div class="btns"><button class="btn primary sm" data-act="use-seq" data-i="' + i + '">Use</button>' +
-          '<a class="btn sm" href="#sequence/' + encodeURIComponent(s.name) + '">Edit</a>' +
-          '<button class="btn ghost sm" data-act="del-seq" data-i="' + i + '" style="margin-left:auto">Delete</button></div></div>';
+    var all = B.campaignList;
+    var groups = { all: all, active: all.filter(function (c) { return c.status === 'active'; }),
+                   ended: all.filter(function (c) { return c.status !== 'active'; }) };
+    var rows = groups[listTab] || all;
+    var html = '<div class="head"><h1>Campaigns</h1><div class="acts">' +
+      '<button class="ibtn" title="Refresh" data-act="refresh">' + ic('refresh') + '</button>' +
+      '<button class="btn primary" data-go="new">' + ic('add') + 'New campaign</button></div></div>' + healthBanner() +
+      '<div class="tabs">' + [['all', 'All'], ['active', 'Active'], ['ended', 'Ended']].map(function (t) {
+        return '<button class="tab' + (listTab === t[0] ? ' on' : '') + '" data-tab="' + t[0] + '">' + t[1] + '<span class="n">' + groups[t[0]].length + '</span></button>';
       }).join('') + '</div>';
+    if (!all.length) {
+      html += '<div class="empty"><div class="art">' + ic('send') + '</div><h2>Send your first campaign</h2>' +
+        '<p>Write one email, add a few follow-ups, and send. Each person gets their own thread, and the follow-ups stop by themselves when they reply.</p>' +
+        '<button class="btn primary" data-go="new">' + ic('add') + 'New campaign</button></div>';
+    } else if (!rows.length) {
+      html += '<div class="empty"><p>No ' + listTab + ' campaigns.</p></div>';
+    } else {
+      html += '<table><thead><tr><th>Name</th><th class="hide-sm">Recipients</th><th class="hide-md">Follow-ups</th><th>Next send</th><th>Status</th><th class="r hide-md">Created</th></tr></thead><tbody>' +
+        rows.map(function (c) {
+          return '<tr class="click" data-go="campaign/' + esc(encodeURIComponent(c.id)) + '"><td class="name"><div>' + esc(c.name) + '</div>' +
+            (c.subject && c.subject !== c.name ? '<div class="s">' + esc(c.subject) + '</div>' : '') + '</td>' +
+            '<td class="num hide-sm">' + c.recipients + (c.active && c.active !== c.recipients ? ' <span style="color:var(--ink-3)">· ' + c.active + ' running</span>' : '') + '</td>' +
+            '<td class="num hide-md">' + (c.steps ? c.steps : '–') + '</td>' +
+            '<td class="num">' + (c.nextLabel ? esc(c.nextLabel) : '<span style="color:var(--ink-3)">–</span>') + '</td>' +
+            '<td>' + statusPill(c.status) + '</td>' +
+            '<td class="num r hide-md">' + (c.createdLabel ? esc(c.createdLabel) : '<span style="color:var(--ink-3)">From Gmail</span>') + '</td></tr>';
+        }).join('') + '</tbody></table>';
     }
     $('#page').innerHTML = html;
   }
 
-  // ───── Sent emails (follow up something already sent from Gmail) ─────
+  // ───── Campaign report ─────
+  function pageReport(id) {
+    var c = B.campaignList.filter(function (x) { return x.id === id; })[0];
+    $('#page').innerHTML = reportHead(c ? { name: c.name, status: c.status, createdLabel: c.createdLabel } : { name: 'Campaign' }, false) +
+      '<div class="loading" style="height:240px"><div class="spin"></div>Checking every thread…</div>';
+    call('studioGetCampaign', id).then(function (r) {
+      if (current !== 'campaign/' + encodeURIComponent(id) && current !== 'campaign/' + id) return;
+      report = r; drawReport();
+    }).catch(function (err) {
+      $('#page').innerHTML = reportHead({ name: 'Campaign' }, false) + '<div class="empty"><h2>Couldn’t open this campaign</h2><p>' + esc(err.message) + '</p>' +
+        '<button class="btn" data-go="campaigns">Back to campaigns</button></div>';
+    });
+  }
+  function reportHead(r, actions) {
+    return '<div class="head"><button class="ibtn" title="Back" data-go="campaigns">' + ic('arrow_back') + '</button>' +
+      '<div style="min-width:0"><div class="eyebrow">' + ic('send') + 'Campaign</div><h1 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(r.name) + '</h1></div>' +
+      (r.status ? statusPill(r.status) : '') +
+      '<div class="acts">' + (actions && r.status === 'active' ? '<button class="btn danger" data-act="stop-campaign">' + ic('stop_circle') + 'Stop all follow-ups</button>' : '') + '</div></div>';
+  }
+  function drawReport() {
+    var r = report, t = r.totals;
+    var stageIcon = { sent: 'check', next: 'mail', pending: 'schedule', skipped: 'close' };
+    var stageTitle = { sent: 'Sent', next: 'Up next', pending: 'Waiting', skipped: 'Not sent' };
+    $('#page').innerHTML = reportHead(r, true) +
+      '<div class="meta">' + (r.createdLabel ? '<span>Sent<b>' + esc(r.createdLabel) + '</b></span>' : '<span>Started from Gmail</span>') +
+        (r.subject && r.subject !== r.name ? '<span>Subject<b>' + esc(r.subject) + '</b></span>' : '') +
+        (r.steps ? '<span>Sequence<b>first email + ' + plural(r.steps, 'follow-up') + '</b></span>' : '') + '</div>' +
+      '<div class="tiles">' +
+        tile('group', 'Recipients', t.recipients) + tile('reply', 'Replied', t.replied, t.replyRate + '%') +
+        tile('forward_to_inbox', 'Follow-ups sent', t.followUpsSent) + tile('schedule', 'Still running', t.active) + tile('task_alt', 'Finished', t.finished) +
+      '</div>' +
+      '<div class="section-h">Recipients<span style="margin-left:auto;font:12px Roboto,sans-serif;color:var(--ink-3)">Follow-ups stop by themselves when someone replies.</span></div>' +
+      '<div class="card"><table><thead><tr><th>Recipient</th><th>Stage</th><th>Status</th><th class="hide-sm">Next send</th><th></th></tr></thead><tbody>' +
+      r.people.map(function (p, i) {
+        return '<tr><td class="name"><div>' + esc(p.email || '(unknown)') + '</div></td>' +
+          '<td><span class="stages">' + p.stages.map(function (s, k) {
+            return ic(stageIcon[s], s, (k === 0 ? 'First email' : 'Follow-up ' + k) + ': ' + stageTitle[s]);
+          }).join('') + '</span></td>' +
+          '<td>' + statusPill(p.status) + '</td>' +
+          '<td class="num hide-sm">' + (p.nextLabel ? esc(p.nextLabel) : '–') + '</td>' +
+          '<td class="r">' + (p.permalink ? '<a class="ibtn sm" title="Open in Gmail" href="' + esc(p.permalink) + '" target="_blank" rel="noopener">' + ic('open_in_new') + '</a>' : '') +
+          (p.status === 'active' ? '<button class="ibtn sm" title="Stop follow-ups for this person" data-act="stop-one" data-i="' + i + '">' + ic('cancel') + '</button>' : '') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  function tile(icon, label, n, extra) {
+    return '<div class="tile"><small>' + ic(icon) + esc(label) + '</small><b>' + n + (extra ? '<em>' + esc(extra) + '</em>' : '') + '</b></div>';
+  }
+
+  // ───── Sent emails ─────
   var threadQuery = '';
   function pageThreads() {
-    $('#page').innerHTML = '<div class="page-head"><h1>Sent emails</h1></div>' +
-      '<p style="margin:-8px 0 16px;color:var(--ink-2)">Pick an email you sent from Gmail to schedule follow-ups on it — they go out as replies in the same thread.</p>' +
-      '<form class="search" id="tsearch"><input id="tq" placeholder="Search sent mail (e.g. to:jane@acme.com or a subject word)" value="' + esc(threadQuery) + '">' +
-      '<button class="btn" type="submit">Search</button></form>' +
-      '<div class="card tlist" id="tlist"><div class="loading" style="height:160px"><div class="spin"></div>Loading your sent mail…</div></div>';
+    $('#page').innerHTML = '<div class="head"><h1>Follow up a sent email</h1></div>' +
+      '<p style="margin:-4px 0 12px;color:var(--ink-2)">Pick something you already sent from Gmail. Follow-ups go out as replies in the same thread and stop when they reply.</p>' +
+      '<form class="search" id="tsearch"><input id="tq" placeholder="Search sent mail, e.g. to:jane@acme.com or a word from the subject" value="' + esc(threadQuery) + '"></form>' +
+      '<div id="tlist"><div class="loading" style="height:160px"><div class="spin"></div>Loading your sent mail…</div></div>';
     loadThreads();
   }
   function loadThreads() {
     call('studioListThreads', threadQuery).then(function (list) {
       var el = $('#tlist'); if (!el) return;
-      if (!list.length) { el.innerHTML = '<div class="empty"><h2>Nothing found</h2><p>Try a different search' + (threadQuery ? '' : ', or send an email from Gmail first') + '.</p></div>'; return; }
-      el.innerHTML = list.map(function (t) {
-        return '<div class="titem" data-thread="' + esc(t.threadId) + '"><div class="main-col"><div class="subj">' + esc(t.subject) + '</div>' +
-          '<div class="sub">' + esc(t.recipient || '') + ' · ' + esc(t.lastLabel) + '</div></div><div class="tags">' +
-          (t.armed ? '<span class="pill ok">Follow-ups on</span>' : '') +
-          (t.waiting ? '<span class="pill gray">No reply yet</span>' : '<span class="pill warn">They replied</span>') + '</div></div>';
-      }).join('');
+      if (!list.length) { el.innerHTML = '<div class="empty"><p>Nothing found' + (threadQuery ? '. Try another search.' : '. Send an email from Gmail first.') + '</p></div>'; return; }
+      el.innerHTML = '<table><tbody>' + list.map(function (t) {
+        return '<tr class="click" data-go="thread/' + esc(encodeURIComponent(t.threadId)) + '"><td class="name"><div><b style="font-weight:500">' + esc(t.recipient || '(no recipient)') + '</b></div>' +
+          '<div class="s">' + esc(t.subject) + '</div></td><td class="r">' +
+          (t.armed ? '<span class="pill active">follow-ups on</span> ' : '') +
+          (t.waiting ? '<span class="pill grey">no reply yet</span>' : '<span class="pill replied">replied</span>') + '</td>' +
+          '<td class="num r hide-sm" style="width:150px">' + esc(t.lastLabel) + '</td></tr>';
+      }).join('') + '</tbody></table>';
     }).catch(function (err) { var el = $('#tlist'); if (el) el.innerHTML = '<div class="empty"><p>' + esc(err.message) + '</p></div>'; });
   }
-
   function pageThread(threadId) {
     $('#page').innerHTML = '<div class="loading"><div class="spin"></div>Opening the email…</div>';
     call('studioGetThread', threadId).then(function (t) {
-      if (current !== 'thread/' + threadId) return;
-      draft = blankDraft('thread');
-      draft.threadId = t.threadId; draft.thread = t;
+      if (current.indexOf('thread/') !== 0) return;
+      draft = blankDraft('thread'); draft.threadId = t.threadId; draft.thread = t;
       drawCompose();
     }).catch(function (err) {
-      $('#page').innerHTML = '<div class="card empty"><h2>Couldn’t open that email</h2><p>' + esc(err.message) + '</p><a class="btn" href="#threads">Back to sent emails</a></div>';
+      $('#page').innerHTML = '<div class="empty"><h2>Couldn’t open that email</h2><p>' + esc(err.message) + '</p><button class="btn" data-go="threads">Back</button></div>';
     });
   }
-
   function threadTop(d) {
     var t = d.thread;
-    var q = t.queue.length
-      ? '<div class="queue"><h3>Scheduled · ' + t.queue.length + '</h3><div class="card">' + t.queue.map(function (s, i) {
-          return '<div class="qitem"><div class="main-col"><div class="when">' + esc(s.label) + ' · ' + esc(condLabel(s.condition)) + '</div>' +
-            '<div class="msg">' + esc((s.message || '(default bump message)').replace(/\s+/g, ' ').slice(0, 160)) + '</div>' +
-            (s.to || s.cc || s.bcc ? '<div class="msg">' + esc([s.to && 'To ' + s.to, s.cc && 'Cc ' + s.cc, s.bcc && 'Bcc ' + s.bcc].filter(Boolean).join(' · ')) + '</div>' : '') +
-            '</div><button class="btn ghost sm" data-act="rm-q" data-i="' + i + '">Remove</button></div>';
-        }).join('') + '</div><div style="margin-top:8px"><button class="btn danger sm" data-act="cancel-thread">Cancel all</button></div></div>'
-      : '';
-    return '<div class="card thread-card"><div class="subj">' + esc(t.subject) + '</div>' +
-      '<div class="meta">To ' + esc(t.recipient || 'unknown') + ' · ' + t.count + ' message' + (t.count === 1 ? '' : 's') + ' · last ' + esc(t.lastLabel) +
-      ' — ' + (t.lastFromMe ? 'you, no reply yet' : '<b>' + esc(t.lastFrom) + ' replied</b>') + '</div>' +
-      (t.snippet ? '<div class="snip">' + esc(t.snippet) + '</div>' : '') +
-      '<div style="margin-top:10px"><a class="btn ghost sm" href="' + esc(t.permalink) + '" target="_blank" rel="noopener">Open in Gmail</a></div></div>' + q;
+    return '<div class="thread-top"><div class="sj">' + esc(t.subject) + '</div>' +
+      '<div class="mt">To ' + esc(t.recipient || 'unknown') + ' · ' + plural(t.count, 'message') + ' · last ' + esc(t.lastLabel) + ' · ' +
+        (t.lastFromMe ? 'no reply yet' : '<b>' + esc(t.lastFrom) + ' replied</b>') + '</div>' +
+      (t.snippet ? '<div class="sn">' + esc(t.snippet) + '</div>' : '') +
+      '<div style="margin-top:10px"><a class="btn sm" href="' + esc(t.permalink) + '" target="_blank" rel="noopener">' + ic('open_in_new') + 'Open in Gmail</a></div></div>' +
+      (t.queue.length ? '<div class="section-h" style="margin-top:18px">Already scheduled<span class="pill active" style="margin-left:8px">' + t.queue.length + '</span>' +
+        '<button class="btn sm danger" style="margin-left:auto" data-act="cancel-thread">Cancel all</button></div><div class="card">' +
+        t.queue.map(function (s, i) {
+          return '<div class="qrow"' + (i === 0 ? ' style="border-top:0"' : '') + '>' + ic('schedule') + '<div class="grow"><div class="w">' + esc(s.label) + ' · ' + esc(condLabel(s.condition)) + '</div>' +
+            '<div class="mg">' + esc((s.message || '(your default follow-up message)').replace(/\s+/g, ' ')) + '</div></div>' +
+            '<button class="btn sm text" data-act="rm-q" data-i="' + i + '">Remove</button></div>';
+        }).join('') + '</div>' : '');
   }
 
-  // ───── Composer (campaign or sequence) ─────
+  // ───── Composer: campaign, sequence, or follow-ups on a sent email ─────
   function pageCompose(mode, seqName) {
     if (mode === 'campaign') {
       if (!draft || draft.mode !== 'campaign') draft = load(DRAFT_KEY) || blankDraft('campaign');
     } else {
-      var seq = null;
-      for (var i = 0; i < B.sequences.length; i++) if (B.sequences[i].name === seqName) seq = B.sequences[i];
+      var seq = B.sequences.filter(function (s) { return s.name === seqName; })[0];
       draft = blankDraft('sequence');
       if (seq) {
         draft.name = seq.name; draft.originalName = seq.name; draft.subject = seq.subject;
         draft.body = seq.firstMessage; draft.followUps = JSON.parse(JSON.stringify(seq.steps));
-      } else {
-        draft.followUps = [newStep(null)];
-      }
+      } else draft.followUps = [newStep(null)];
     }
     drawCompose();
   }
 
   function drawCompose() {
     var d = draft, isSeq = d.mode === 'sequence', isThread = d.mode === 'thread';
-    var recips = parseRecipients(d.recipients);
-    var head = '<div class="page-head"><h1>' + (isThread ? 'Follow up' : isSeq ? (d.originalName ? 'Edit sequence' : 'New sequence') : 'New campaign') + '</h1>' +
-      '<span class="saving" id="saving"></span><div class="actions">' +
-      '<button class="btn" data-act="preview">' + I.eye + 'Show preview</button>' +
-      (isThread
-        ? '<button class="btn primary" data-act="schedule">' + I.clock + 'Schedule follow-ups</button>'
-        : isSeq
-        ? '<button class="btn primary" data-act="save-seq-page">Save sequence</button>'
-        : '<button class="btn primary" data-act="send">' + I.send + 'Send emails</button>') +
-      '</div></div>';
+    var recips = parseRecipients(d.recipients), n = recips.length;
+    var title = isThread ? 'Follow up' : isSeq ? (d.originalName ? 'Edit sequence' : 'New sequence') : 'New campaign';
+    var back = isThread ? 'threads' : isSeq ? 'sequences' : 'campaigns';
+    var primary = isThread ? '<button class="btn primary" data-act="review">' + ic('schedule_send') + 'Schedule follow-ups</button>'
+      : isSeq ? '<button class="btn primary" data-act="save-seq-page">' + ic('save') + 'Save sequence</button>'
+      : '<button class="btn primary" data-act="review">' + ic('send') + (n ? 'Send ' + plural(n, 'email') : 'Send emails') + '</button>';
+    var head = '<div class="head"><button class="ibtn" title="Back" data-go="' + back + '">' + ic('arrow_back') + '</button><h1>' + title + '</h1>' +
+      '<span class="saved" id="saved"></span><div class="acts"><button class="btn" data-act="preview">Show preview</button>' + primary + '</div></div>';
 
-    var chips = recips.slice(0, 6).map(function (r) {
-      return '<span class="rchip" title="' + esc(r.email) + '">' + esc(r.name || r.email) + '</span>';
-    }).join('') + (recips.length > 6 ? '<span class="rchip more">+' + (recips.length - 6) + ' more</span>' : '');
+    var toRow = n
+      ? '<button class="chip" data-act="recipients">' + ic('group') + plural(n, 'recipient') + '</button>'
+      : '<button class="linkbtn" data-act="recipients">Select recipients</button>';
+    var mail = isThread ? threadTop(d) : '<div class="mail">' +
+      '<div class="fld"><label>From</label><div class="val">' + esc((B.me.displayName ? B.me.displayName + ' ' : '') + '<' + (B.me.email || '') + '>') + '</div>' +
+        '<button class="ibtn sm" title="More" data-act="more">' + ic('more_vert') + '</button></div>' +
+      (isSeq ? '<div class="fld"><label>Name</label><input data-k="name" placeholder="e.g. Demo request follow-ups" value="' + esc(d.name) + '"></div>'
+             : '<div class="fld"><label>To</label><div class="val" style="overflow:visible">' + toRow + '</div></div>') +
+      (!isSeq && (d.showCc || d.cc || d.bcc)
+        ? '<div class="fld"><label>Cc</label><input data-k="cc" placeholder="Copied on every email (optional)" value="' + esc(d.cc) + '"></div>' +
+          '<div class="fld"><label>Bcc</label><input data-k="bcc" placeholder="Blind-copied on every email (optional)" value="' + esc(d.bcc) + '"></div>' : '') +
+      '<div class="fld"><label>Subject</label><input data-k="subject" placeholder="Enter your email subject" value="' + esc(d.subject) + '"></div>' +
+      tools(-1) +
+      '<textarea class="body" data-k="body" placeholder="' + (isSeq ? 'Optional: a first email to pre-fill when you use this sequence.' : 'Hi {firstName},\n\nWrite your email here…') + '">' + esc(d.body) + '</textarea></div>';
 
-    var mail = isThread ? threadTop(d) : '<div class="card mail">' +
-      '<div class="row"><label>From</label><div>' + esc((B.me.displayName ? B.me.displayName + ' ' : '') + '<' + (B.me.email || '') + '>') + '</div></div>' +
-      (isSeq
-        ? '<div class="row"><label>Name</label><input data-k="name" placeholder="e.g. Demo request follow-ups" value="' + esc(d.name) + '"></div>'
-        : '<div class="row"><label>To</label><div class="recips">' + chips +
-          '<button class="chip-btn" data-act="recipients">' + (recips.length ? 'Edit recipients' : 'Select recipients') + '</button></div></div>') +
-      '<div class="row"><label>Subject</label><input data-k="subject" placeholder="Enter your email subject" value="' + esc(d.subject) + '"></div>' +
-      toolbar(-1) +
-      '<textarea class="body" data-k="body" placeholder="' + (isSeq
-        ? 'Optional: a first email to pre-fill when this sequence is used in a campaign.'
-        : 'Hi {firstName},\n\nWrite your first email here…') + '">' + esc(d.body) + '</textarea></div>';
-
-    var unitOpts = [['days', 'days'], ['hours', 'hours'], ['minutes', 'minutes']].concat(isSeq ? [] : [['date', 'on a date…']]);
+    var units = [['days', 'days'], ['hours', 'hours'], ['minutes', 'minutes']].concat(isSeq ? [] : [['date', 'on a date…']]);
     var fus = d.followUps.map(function (s, i) {
-      return '<div class="connector"></div><div class="card fu-card" data-fu="' + i + '">' +
-        '<div class="fu-head"><span class="num">' + (i + 1) + '.</span>' +
-        select('condition', i, B.conditions.map(function (c) { return [c.value, c.value === 'no_reply' ? 'If no reply' : c.label]; }), s.condition) +
+      return '<div class="link-line"></div><div class="fu-card"><div class="fu-bar"><span class="num">' + (i + 2) + '</span>' +
+        select('condition', i, B.conditions.map(function (c) { return [c.value, condLabel(c.value)]; }), s.condition) +
         (s.unit === 'date'
-          ? '<span>on</span>' + select('unit', i, unitOpts, s.unit) +
-            '<input type="datetime-local" data-fk="sendAtLocal" data-i="' + i + '" value="' + esc(s.sendAtLocal || '') + '"><span>send this email</span>'
-          : '<span>after</span><input type="number" min="1" max="999" data-fk="amount" data-i="' + i + '" value="' + esc(s.amount) + '">' +
-            select('unit', i, unitOpts, s.unit) +
-            '<span>send this email</span>' +
-            select('atTime', i, B.atTimes.map(function (t) { return [t.value, t.value ? 'at ' + t.label : 'at any time']; }), s.atTime)) +
-        '<span class="grow"></span><button class="icon-btn" title="Remove follow-up" data-act="rm-fu" data-i="' + i + '">' + I.x + '</button></div>' +
-        toolbar(i) +
+          ? '<span>on</span>' + select('unit', i, units, s.unit) + '<input type="datetime-local" data-fk="sendAtLocal" data-i="' + i + '" value="' + esc(s.sendAtLocal || '') + '">'
+          : '<span>after</span><input type="number" min="1" max="999" data-fk="amount" data-i="' + i + '" value="' + esc(s.amount) + '">' + select('unit', i, units, s.unit) +
+            select('atTime', i, B.atTimes.map(function (t) { return [t.value, t.value ? 'at ' + t.label : 'any time']; }), s.atTime)) +
+        '<span class="grow"></span>' +
+        '<button class="ibtn sm" title="More" data-act="fu-more" data-i="' + i + '">' + ic('more_vert') + '</button></div>' +
         (s.showCc || s.cc || s.bcc
-          ? '<div class="cc-rows"><div class="row"><label>Cc</label><input data-fk="cc" data-i="' + i + '" placeholder="Only this email (optional)" value="' + esc(s.cc || '') + '"></div>' +
-            '<div class="row"><label>Bcc</label><input data-fk="bcc" data-i="' + i + '" placeholder="Only this email (optional)" value="' + esc(s.bcc || '') + '"></div></div>'
-          : '') +
-        '<textarea class="body fu" data-fk="message" data-i="' + i + '" placeholder="Write your follow-up… (blank = your default bump message)">' + esc(s.message) + '</textarea></div>';
+          ? '<div class="ccrow"><label>Cc</label><input data-fk="cc" data-i="' + i + '" placeholder="Only on this follow-up" value="' + esc(s.cc || '') + '"></div>' +
+            '<div class="ccrow"><label>Bcc</label><input data-fk="bcc" data-i="' + i + '" placeholder="Only on this follow-up" value="' + esc(s.bcc || '') + '"></div>' : '') +
+        tools(i) +
+        '<textarea class="body fu" data-fk="message" data-i="' + i + '" placeholder="Write your follow-up… (leave blank to send your default follow-up)">' + esc(s.message) + '</textarea></div>';
     }).join('');
+    var add = d.followUps.length < B.maxSteps
+      ? '<div class="link-line"></div><div class="add-fu"><button class="btn" data-act="add-fu">' + ic('add') + 'Add a follow-up email</button></div>'
+      : '<div class="link-line"></div><div class="hint" style="text-align:center">That’s the maximum of ' + B.maxSteps + ' follow-ups.</div>';
 
-    var addBtn = d.followUps.length < B.maxSteps
-      ? '<div class="connector"></div><div class="add-fu"><button class="btn" data-act="add-fu">' + I.plus + 'Add a follow-up email</button></div>'
-      : '<div class="connector"></div><div class="hint" style="text-align:center">Maximum of ' + B.maxSteps + ' follow-ups.</div>';
-
-    var side = '<aside class="side">' +
-      '<section><h3>Sequence</h3>' +
-      (!isSeq
-        ? '<div class="field"><div class="load-seq"><select id="seqPick"><option value="">Add follow-ups from a sequence…</option>' +
-          (B.sequences.length ? '<optgroup label="Your sequences">' + B.sequences.map(function (s, i) { return '<option value="' + i + '">' + esc(s.name) + ' (' + s.steps.length + ')</option>'; }).join('') + '</optgroup>' : '') +
-          '<optgroup label="Quick (default message)">' + PRESETS.map(function (p) { return '<option value="p:' + p[0] + '">' + p[0] + ' days</option>'; }).join('') + '</optgroup>' +
-          '</select></div><div class="hint">Picking one adds all its follow-ups' + (isThread ? '.' : ' below your email.') + '</div></div>'
-        : '') +
-      '<div id="summary">' + summaryHtml() + '</div>' +
-      (!isSeq ? '<button class="btn ghost sm" data-act="save-as-seq" style="margin-top:10px">Save follow-ups as a sequence</button>' : '') +
-      '</section>' +
+    var side = '<aside class="side"><section><h3>Settings</h3>' +
+      '<div class="opt">' + ic('do_not_disturb_on') + '<span class="grow">Stop when they reply</span><span class="lock">Always</span></div>' +
+      autopilotRow() +
       (isSeq ? '' :
-        '<section><h3>Settings</h3>' +
-        (isThread ? '<div class="field"><label>Send to (optional)</label><input data-k="recipients" placeholder="Blank = whoever is on the thread" value="' + esc(d.recipients) + '"></div>' : '') +
-        '<div class="field"><label>Campaign name</label><input data-k="campaignName" placeholder="Optional" value="' + esc(d.campaignName) + '"></div>' +
-        '<div class="field"><label>Time zone (for follow-up times)</label><select data-k="tz">' +
-          B.tzChoices.map(function (t) { return '<option value="' + esc(t.value) + '"' + (t.value === d.tz ? ' selected' : '') + '>' + esc(t.label) + '</option>'; }).join('') +
-        '</select></div>' +
-        '<div class="field"><label>Cc (every ' + (isThread ? 'follow-up' : 'recipient') + ')</label><input data-k="cc" placeholder="Optional" value="' + esc(d.cc) + '"></div>' +
-        '<div class="field"><label>Bcc (every ' + (isThread ? 'follow-up' : 'recipient') + ')</label><input data-k="bcc" placeholder="Optional" value="' + esc(d.bcc) + '"></div>' +
-        (isThread ? '' : '<button class="btn ghost sm" data-act="clear-draft">Start over</button>') + '</section>') +
-      (isSeq && d.originalName ? '<section><button class="btn danger sm" data-act="del-seq-page">Delete sequence</button></section>' : '') +
-      '</aside>';
+        '<div class="field"><label>Time zone for follow-ups</label><select data-k="tz">' + B.tzChoices.map(function (t) {
+          return '<option value="' + esc(t.value) + '"' + (t.value === d.tz ? ' selected' : '') + '>' + esc(t.label) + '</option>'; }).join('') + '</select></div>' +
+        '<div class="field"><label>Campaign name</label><input data-k="campaignName" placeholder="Optional, for your list" value="' + esc(d.campaignName) + '"></div>' +
+        (isThread ? '<div class="field"><label>Send follow-ups to</label><input data-k="recipients" placeholder="Blank = whoever is on the thread" value="' + esc(d.recipients) + '"></div>' +
+                    '<div class="field"><label>Cc / Bcc on every follow-up</label><input data-k="cc" placeholder="Cc (optional)" value="' + esc(d.cc) + '" style="margin-bottom:6px"><input data-k="bcc" placeholder="Bcc (optional)" value="' + esc(d.bcc) + '"></div>' : '')) +
+      '</section><section><h3>Sequence</h3><div class="seq" id="summary">' + summaryHtml() + '</div>' +
+      '<div class="sidelinks">' +
+        (!isSeq ? '<button class="linkbtn" data-act="load-seq">' + (B.sequences.length ? 'Use a saved sequence' : 'Use a quick cadence') + '</button>' : '') +
+        (!isSeq ? '<button class="linkbtn" data-act="save-as-seq">Save follow-ups as a sequence</button>' : '') +
+        (d.mode === 'campaign' ? '<button class="linkbtn" data-act="clear-draft" style="color:var(--ink-2)">Start over</button>' : '') +
+        (isSeq && d.originalName ? '<button class="linkbtn" data-act="del-seq-page" style="color:var(--bad)">Delete sequence</button>' : '') +
+      '</div></section></aside>';
 
-    if (isThread && !d.followUps.length) {
-      addBtn = '<div class="connector"></div><div class="add-fu" style="flex-direction:column;align-items:center;gap:8px">' +
-        '<button class="btn" data-act="add-fu">' + I.plus + 'Add a follow-up email</button>' +
-        '<div class="hint">…or pick a sequence on the ' + (window.innerWidth < 960 ? 'below' : 'right') + '.</div></div>';
-    }
-    $('#page').innerHTML = head + (isSeq ? '' : healthBanner()) +
-      '<div class="compose"><div>' + mail + fus + addBtn + '</div>' + side + '</div>';
+    var meter = d.mode === 'campaign'
+      ? '<div class="meter"><div class="bar"><i class="' + (n > B.maxRecipients ? 'over' : '') + '" style="width:' + Math.min(100, n * 100 / B.maxRecipients) + '%"></i></div>' +
+        '<span>' + n + ' / ' + B.maxRecipients + ' recipients in this send</span></div>' : '';
+
+    $('#page').innerHTML = head + (isSeq ? '' : healthBanner()) + '<div class="compose"><div>' + mail + fus + add + meter + '</div>' + side + '</div>';
     autosizeAll();
   }
 
@@ -658,185 +812,412 @@
       return '<option value="' + esc(o[0]) + '"' + (o[0] === (cur || '') ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
     }).join('') + '</select>';
   }
-  function toolbar(i) {
-    return '<div class="toolbar"><button class="tool" data-act="vars" data-i="' + i + '">' + I.braces + 'Insert variable</button>' +
-      (i >= 0 ? '<button class="tool" data-act="toggle-cc" data-i="' + i + '">Cc/Bcc</button>' : '') +
-      (i === -1 && draft.mode === 'campaign' ? '<span class="sep"></span><span class="hint" style="margin:0">Your signature is added automatically.</span>' : '') + '</div>';
+  function tools(i) {
+    var camp = draft.mode !== 'sequence' && draft.mode !== 'thread';
+    return '<div class="tools"><button class="tool" data-act="vars" data-i="' + i + '" title="Insert a variable">' + ic('data_object') + 'Variables</button>' +
+      (i >= 0 ? '<button class="tool" data-act="toggle-cc" data-i="' + i + '">' + ic('group_add') + 'Cc / Bcc</button>' : '') +
+      (camp ? '<button class="tool" data-act="test" data-i="' + i + '">' + ic('outgoing_mail') + 'Send me a test</button>' : '') +
+      (i === -1 && draft.mode === 'campaign' ? '<span class="note">Your signature is added automatically</span>' : '') + '</div>';
   }
-
   function summaryHtml() {
     var d = draft;
-    var first = '<div class="card seq-step"><b>1. ' + esc((d.mode === 'thread' ? d.thread.subject : d.subject) || '(no subject)') + '</b><span>' +
-      (d.mode === 'sequence' ? 'Your first email' : d.mode === 'thread' ? 'Already sent' : 'Sent when you click Send') + '</span></div>';
+    var first = '<div class="seq-item"><b>1. ' + esc((d.mode === 'thread' ? d.thread.subject : d.subject) || '(no subject)') + '</b><small><span>' +
+      (d.mode === 'thread' ? ic('check') + 'Already sent' : d.mode === 'sequence' ? 'Your first email' : ic('bolt') + 'Sent right away') + '</span></small></div>';
     return first + d.followUps.map(function (s, i) {
       var line = (s.message || '').replace(/\s+/g, ' ').trim();
-      return '<div class="seq-line"></div><div class="card seq-step"><b>' + (i + 2) + '. ' + esc(line || '(default bump message)') + '</b>' +
-        '<span>' + I.bolt + esc(condLabel(s.condition)) + '</span><span>' + I.clock + esc(waitLabel(s)) + '</span></div>';
+      return '<div class="seq-join"></div><div class="seq-item"><b>' + (i + 2) + '. ' + esc(line || '(default follow-up)') + '</b>' +
+        '<small><span>' + ic('bolt') + esc(condLabel(s.condition)) + '</span><span>' + ic('schedule') + esc(waitLabel(s)) + '</span></small></div>';
     }).join('');
   }
   function refreshSummary() { var el = $('#summary'); if (el) el.innerHTML = summaryHtml(); }
 
-  function autosize(t) { t.style.height = 'auto'; t.style.height = Math.max(t.scrollHeight, t.classList.contains('fu') ? 150 : 260) + 'px'; }
+  // ───── Autopilot (account-wide sending hours, daily cap, delay) ─────
+  var AP_ORDER = [1, 2, 3, 4, 5, 6, 0];
+  var AP_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  var AP_DELAYS = [0, 5, 10, 15, 20, 30, 45, 60, 90, 120];
+  function apDaysLabel(ap) {
+    var on = AP_ORDER.filter(function (d) { return ap.days[d].on; });
+    if (!on.length) return 'No sending days';
+    var same = on.every(function (d) { return ap.days[d].from === ap.days[on[0]].from && ap.days[d].to === ap.days[on[0]].to; });
+    var short = function (d) { return AP_DAYS[d].slice(0, 3); };
+    var run = on.length > 2 && AP_ORDER.indexOf(on[on.length - 1]) - AP_ORDER.indexOf(on[0]) === on.length - 1;
+    var days = on.length === 7 ? 'Every day' : run ? short(on[0]) + '–' + short(on[on.length - 1]) : on.map(short).join(', ');
+    return days + (same ? ' · ' + ap.days[on[0]].from + '–' + ap.days[on[0]].to : '');
+  }
+  function autopilotRow() {
+    var ap = B.autopilot && B.autopilot.settings;
+    if (!ap) return '';
+    return '<button class="opt optbtn" data-act="autopilot" title="Choose when follow-ups are sent">' + ic('auto_mode') +
+      '<span class="grow">Autopilot<small>' + esc(ap.enabled ? apDaysLabel(ap) : 'Follow-ups send whenever they’re due') + '</small></span>' +
+      (ap.enabled ? '<span class="lock">On</span>' : '<span class="offpill">Off</span>') + '</button>';
+  }
+  function apDuration(min) {
+    if (min < 60) return plural(Math.max(1, Math.round(min)), 'minute');
+    var h = Math.floor(min / 60), m = Math.round(min % 60);
+    return plural(h, 'hour') + (m ? ' ' + plural(m, 'minute') : '');
+  }
+  function apMins(t) { var p = String(t).split(':'); return +p[0] * 60 + +p[1]; }
+  // Plain-language estimate of how long one follow-up step takes to reach n people.
+  function apSummary(ap, n, example) {
+    var st = B.autopilot, every = st.interval || 5, perRun = st.maxPerRun || 25;
+    var on = AP_ORDER.filter(function (d) { return ap.days[d].on; });
+    if (!on.length) return { warn: true, text: 'Pick at least one sending day, or follow-ups will wait forever.' };
+    // The scheduler checks every few minutes, so a wait rounds up to whole checks.
+    var gap = ap.delayMinutes ? Math.ceil(ap.delayMinutes / every) * every : 0;
+    var who = example ? 'For every ' + n + ' recipients' : n === 1 ? 'For your recipient' : 'With ' + n + ' recipients';
+    var left = n, days = 0, cap = 0;
+    while (left > 0 && days < 400) {
+      var w = ap.days[on[days % on.length]], len = apMins(w.to) - apMins(w.from);
+      var c = Math.min(ap.maxPerDay, gap ? Math.floor(len / gap) + 1 : (Math.floor(len / every) + 1) * perRun);
+      cap = Math.max(cap, c); left -= c; days++;
+    }
+    if (days > 1) return { warn: true, text: who + ', each follow-up step is spread over about ' + plural(days, 'sending day') +
+      ' (up to ' + cap + ' a day). Raise the daily limit or shorten the wait to go faster.' };
+    var mins = gap ? (n - 1) * gap : (Math.ceil(n / perRun) - 1) * every;
+    return { text: who + ', each follow-up step goes out ' + (mins <= 0 ? 'within a few minutes' : 'in about ' + apDuration(mins)) + ' once it’s due.' };
+  }
+  function openAutopilot() {
+    var st = B.autopilot, ap = JSON.parse(JSON.stringify(st.settings));
+    var count = draft.mode === 'thread' ? 1 : parseRecipients(draft.recipients).length;
+    var example = draft.mode === 'sequence' || !count;
+    var n = example ? 10 : count;
+    var tz = (B.tzChoices.filter(function (t) { return t.value === st.tz; })[0] || { label: st.tz }).label;
+    var delays = AP_DELAYS.indexOf(ap.delayMinutes) === -1 ? AP_DELAYS.concat([ap.delayMinutes]).sort(function (a, b) { return a - b; }) : AP_DELAYS;
+    var html = '<label class="ap-toggle"><input type="checkbox" id="apOn"' + (ap.enabled ? ' checked' : '') + '><span><b>Use Autopilot</b>' +
+        '<small>Send follow-ups only on the days and hours you pick, a few at a time, so they look like you sent them by hand.</small></span></label>' +
+      '<div class="ap-body" id="apBody"><div class="ap-h">Sending days and hours<small>Based on your time zone: ' + esc(tz) + '</small></div>' +
+      AP_ORDER.map(function (d) {
+        var w = ap.days[d];
+        return '<div class="ap-day' + (w.on ? '' : ' off') + '" data-row="' + d + '"><label><input type="checkbox" data-ad="on" data-d="' + d + '"' + (w.on ? ' checked' : '') + '>' + AP_DAYS[d] + '</label>' +
+          '<input type="time" step="900" data-ad="from" data-d="' + d + '" value="' + esc(w.from) + '" aria-label="' + AP_DAYS[d] + ' from"><span class="offtxt">to</span>' +
+          '<input type="time" step="900" data-ad="to" data-d="' + d + '" value="' + esc(w.to) + '" aria-label="' + AP_DAYS[d] + ' to"></div>';
+      }).join('') +
+      '<div class="ap-grid"><div class="field"><label for="apMax">Max follow-ups per day</label><input id="apMax" type="number" min="1" max="2000" value="' + ap.maxPerDay + '"></div>' +
+        '<div class="field"><label for="apDelay">Wait between emails</label><select id="apDelay">' + delays.map(function (m) {
+          return '<option value="' + m + '"' + (m === ap.delayMinutes ? ' selected' : '') + '>' + (m ? apDuration(m) : 'No wait') + '</option>'; }).join('') + '</select></div></div>' +
+      '</div><div class="ap-sum" id="apSum"></div>' +
+      '<div class="ap-note">Follow-ups that come due outside these hours, or after the daily limit, wait for the next sending window. Nothing is skipped. ' +
+        'Applies to all your follow-ups, not just this campaign; first emails still go out right away.' +
+        (st.settings.enabled ? ' Sent today: ' + st.sentToday + ' of ' + st.settings.maxPerDay + '.' +
+          (!st.sendingNow && st.nextSlotLabel ? ' Next sending window: ' + esc(st.nextSlotLabel) + '.' : '') : '') + '</div>';
+    var m = modal({ title: 'Autopilot', width: 560, html: html, actions: [
+      { label: 'Cancel', cls: 'text' },
+      { label: 'Save', cls: 'primary', onClick: function () {
+        read();
+        if (ap.enabled && !ap.days.some(function (w) { return w.on; })) { toast('Pick at least one sending day.'); return true; }
+        var bad = ap.days.filter(function (w) { return w.on && !(w.to > w.from); })[0];
+        if (ap.enabled && bad) { toast('Each “to” time has to be later than its “from” time.'); return true; }
+        return call('studioSaveAutopilot', ap).then(function (res) {
+          B.autopilot = res; drawCompose();
+          toast(res.settings.enabled ? 'Autopilot is on: ' + apDaysLabel(res.settings) + '.' : 'Autopilot is off. Follow-ups send as soon as they’re due.');
+        });
+      } }
+    ] });
+    function read() {
+      ap.enabled = $('#apOn', m.el).checked;
+      $all('[data-ad]', m.el).forEach(function (el) {
+        var w = ap.days[+el.getAttribute('data-d')], k = el.getAttribute('data-ad');
+        if (k === 'on') w.on = el.checked; else if (el.value) w[k] = el.value.slice(0, 5);
+      });
+      var max = Math.floor(+$('#apMax', m.el).value);
+      ap.maxPerDay = max > 0 ? Math.min(2000, max) : st.settings.maxPerDay;
+      ap.delayMinutes = +$('#apDelay', m.el).value;
+    }
+    function update() {
+      read();
+      $('#apBody', m.el).classList.toggle('dim', !ap.enabled);
+      AP_ORDER.forEach(function (d) { $('[data-row="' + d + '"]', m.el).classList.toggle('off', !ap.days[d].on); });
+      var sum = ap.enabled ? apSummary(ap, n, example) : { text: 'Autopilot is off: each follow-up goes out as soon as it’s due, any day, any time.' };
+      var el = $('#apSum', m.el);
+      el.className = 'ap-sum' + (sum.warn ? ' warn' : '');
+      el.innerHTML = ic(sum.warn ? 'warning' : 'schedule_send') + '<span>' + esc(sum.text) + '</span>';
+    }
+    m.el.addEventListener('input', update);
+    m.el.addEventListener('change', update);
+    update();
+  }
+  function autosize(t) { t.style.height = 'auto'; t.style.height = Math.max(t.scrollHeight, t.classList.contains('fu') ? 140 : 280) + 'px'; }
   function autosizeAll() { $all('textarea.body').forEach(autosize); }
 
-  // ───── Composer actions ─────
   function applySequence(seq) {
-    var d = draft, added = seq.steps.length;
+    var d = draft;
     d.followUps = JSON.parse(JSON.stringify(seq.steps));
     if (d.mode === 'campaign') {
       if (!d.subject && seq.subject) d.subject = seq.subject;
       if (!d.body.trim() && seq.firstMessage) d.body = seq.firstMessage;
     }
-    persistDraft();
-    drawCompose();
-    toast('Added ' + added + ' follow-up' + (added === 1 ? '' : 's') + ' from “' + seq.name + '”.');
+    persistDraft(); drawCompose();
+    toast('Added ' + plural(seq.steps.length, 'follow-up') + ' from “' + seq.name + '”.');
   }
 
+  // Select recipients: paste, or a CSV file, read in the browser.
   function editRecipients() {
+    var tab = 'paste', parsed = null;
     var m = modal({
-      title: 'Recipients',
-      html: '<p style="margin-top:0">Paste email addresses — one per line, or separated by commas. ' +
-        '<code>Name &lt;email&gt;</code> fills <code>{firstName}</code>. Each person gets their own email and thread.</p>' +
-        '<textarea class="rec-area" id="recIn" placeholder="Jane Doe <jane@acme.com>\nsam@globex.com">' + esc(draft.recipients) + '</textarea>' +
-        '<div class="hint" id="recCount"></div>',
+      title: 'Select recipients', width: 720,
+      html: '<div class="rec"><div class="rec-tabs">' +
+        '<button data-rt="paste" class="on">' + ic('content_paste') + 'Copy / paste</button>' +
+        '<button data-rt="csv">' + ic('upload_file') + 'Import a CSV</button></div>' +
+        '<div id="recPane"></div></div>',
       actions: [
-        { label: 'Cancel', cls: 'ghost' },
-        { label: 'Done', cls: 'primary', onClick: function (el) {
-          draft.recipients = $('#recIn', el).value; persistDraft(); drawCompose(); return false;
+        { label: 'Cancel', cls: 'text' },
+        { label: 'Save', cls: 'primary', onClick: function (el) {
+          var text = tab === 'paste' ? $('#recIn', el).value : (parsed || []).map(function (r) { return r.name ? r.name + ' <' + r.email + '>' : r.email; }).join('\n');
+          if (tab === 'csv' && !parsed) { toast('Pick a CSV file first.'); return true; }
+          draft.recipients = text; persistDraft(); drawCompose(); return false;
         } }
       ]
     });
-    var ta = $('#recIn', m.el), cnt = $('#recCount', m.el);
-    function upd() {
-      var n = parseRecipients(ta.value).length;
-      cnt.textContent = n + ' recipient' + (n === 1 ? '' : 's') + (n > B.maxRecipients ? ' — max ' + B.maxRecipients + ' per send' : '');
-      cnt.style.color = n > B.maxRecipients ? 'var(--bad)' : '';
+    var pane = $('#recPane', m.el);
+    function table(list) {
+      return '<div class="rec-table"><table><thead><tr><th>Email</th><th>Name</th><th>{firstName}</th></tr></thead><tbody>' +
+        list.slice(0, 200).map(function (r) {
+          return '<tr><td>' + esc(r.email) + '</td><td>' + esc(r.name || '–') + '</td><td>' + esc(firstNameOf(r.name) || 'there') + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
     }
-    ta.addEventListener('input', upd); upd();
+    function count(list) {
+      var n = list.length;
+      return '<div class="hint" style="' + (n > B.maxRecipients ? 'color:var(--bad)' : '') + '">' + plural(n, 'recipient') +
+        (n > B.maxRecipients ? ': up to ' + B.maxRecipients + ' per send' : '') + '. Each person gets their own email and thread.</div>';
+    }
+    function draw() {
+      $all('[data-rt]', m.el).forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-rt') === tab); });
+      if (tab === 'paste') {
+        pane.innerHTML = '<textarea class="paste" id="recIn" placeholder="One per line, or separated by commas:\nJane Doe <jane@acme.com>\nsam@globex.com">' + esc(draft.recipients) + '</textarea><div id="recCount"></div>' +
+          '<div class="hint">Use <b>Name &lt;email&gt;</b> to fill {firstName}.</div>';
+        var ta = $('#recIn', pane);
+        var upd = function () { $('#recCount', pane).innerHTML = count(parseRecipients(ta.value)); };
+        ta.addEventListener('input', upd); upd(); ta.focus();
+      } else {
+        pane.innerHTML = '<label class="empty" style="display:block;border:2px dashed var(--blue-line);border-radius:16px;padding:32px;cursor:pointer;background:var(--blue-tint)">' +
+          '<div class="art" style="background:#fff">' + ic('upload_file') + '</div><b>Choose a CSV file</b><p class="hint">Columns named email, name or first name (any order). Read on your computer, never uploaded.</p>' +
+          '<input type="file" id="csvIn" accept=".csv,text/csv" style="display:none"></label><div id="csvOut"></div>';
+        $('#csvIn', pane).addEventListener('change', function (e) {
+          var f = e.target.files[0]; if (!f) return;
+          var rd = new FileReader();
+          rd.onload = function () {
+            parsed = csvRecipients(String(rd.result || ''));
+            $('#csvOut', pane).innerHTML = parsed.length ? count(parsed) + table(parsed) : '<p style="color:var(--bad)">No email addresses found in that file.</p>';
+            if (!parsed.length) parsed = null;
+          };
+          rd.readAsText(f);
+        });
+      }
+    }
+    $all('[data-rt]', m.el).forEach(function (b) { b.addEventListener('click', function () { tab = b.getAttribute('data-rt'); draw(); }); });
+    draw();
+  }
+  // Minimal CSV: quoted fields, header row with email / name / first name columns.
+  function csvRecipients(text) {
+    var rows = [], row = [], f = '', q = false;
+    for (var i = 0; i < text.length; i++) {
+      var ch = text[i];
+      if (q) { if (ch === '"' && text[i + 1] === '"') { f += '"'; i++; } else if (ch === '"') q = false; else f += ch; }
+      else if (ch === '"') q = true;
+      else if (ch === ',' || ch === ';') { row.push(f); f = ''; }
+      else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(f); rows.push(row); row = []; f = ''; }
+      else f += ch;
+    }
+    if (f || row.length) { row.push(f); rows.push(row); }
+    if (!rows.length) return [];
+    var h = rows[0].map(function (x) { return x.trim().toLowerCase(); });
+    var ei = h.findIndex(function (x) { return /e-?mail/.test(x); });
+    var ni = h.findIndex(function (x) { return x === 'name' || x === 'full name'; });
+    var fi = h.findIndex(function (x) { return /^first ?name$/.test(x); });
+    var li = h.findIndex(function (x) { return /^last ?name$/.test(x); });
+    var body = ei === -1 ? rows : rows.slice(1);
+    var out = [], seen = {};
+    body.forEach(function (r) {
+      var email = ei === -1 ? (r.join(' ').match(/[^\s<>,;"]+@[^\s<>,;"]+\.[^\s<>,;"]+/) || [''])[0] : String(r[ei] || '').trim();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || seen[email.toLowerCase()]) return;
+      seen[email.toLowerCase()] = true;
+      var name = ni !== -1 ? r[ni] : fi !== -1 ? [r[fi], li !== -1 ? r[li] : ''].join(' ') : '';
+      out.push({ email: email, name: String(name || '').replace(/[<>"]/g, '').trim() });
+    });
+    return out;
   }
 
-  function previewHtml() {
+  // ───── Show preview / review (the check step before anything sends) ─────
+  function previewPayload() {
     var d = draft;
-    if (d.mode === 'thread') {
-      var tr = parseRecipients(d.recipients || d.thread.recipient)[0] || { name: '', email: d.thread.recipient };
-      var subj = /^re:/i.test(d.thread.subject) ? d.thread.subject : 'Re: ' + d.thread.subject;
-      if (!d.followUps.length) return '<p style="margin-top:0">Add a follow-up first.</p>';
-      return '<p style="margin-top:0">As <b>' + esc(tr.name || tr.email) + '</b> will see it.</p>' + d.followUps.map(function (s, i) {
-        return '<div class="preview-mail"><div class="ph">Follow-up ' + (i + 1) + ' · ' + esc(condLabel(s.condition)) + ' · ' + esc(waitLabel(s)) +
-          ' · ' + esc(subj) + '</div>' + esc(withSignature(render(s.message || B.defaultTemplate, tr))) + '</div>';
-      }).join('');
+    if (d.mode === 'thread') return { mode: 'thread', threadId: d.threadId, followUps: stepsPayload(d.followUps), tz: d.tz };
+    return { recipients: d.recipients, subject: d.subject, body: d.body, followUps: stepsPayload(d.followUps), tz: d.tz };
+  }
+  function openPreview() {
+    var d = draft, isThread = d.mode === 'thread', isSeq = d.mode === 'sequence';
+    var recips = isThread ? [parseRecipients(d.recipients || d.thread.recipient)[0] || { name: '', email: d.thread.recipient }]
+                          : parseRecipients(d.recipients);
+    var sample = !recips.length;
+    if (sample) recips = [{ name: 'Jane Doe', email: 'jane@example.com' }];
+    var idx = 0, mobile = false, checks = isSeq ? { blockers: [], warnings: [], schedule: [] } : null;
+    var sendLabel = isThread ? 'Schedule ' + plural(d.followUps.length, 'follow-up') : 'Send ' + plural(recips.length, 'email');
+
+    var wrap = document.createElement('div');
+    wrap.innerHTML = '<div class="scrim"></div><div class="drawer" role="dialog" aria-modal="true"></div>';
+    var drawer = $('.drawer', wrap);
+    function close() { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); document.removeEventListener('keydown', onKey); }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    $('.scrim', wrap).addEventListener('click', close);
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(wrap);
+
+    function checksHtml() {
+      if (isSeq) return '';
+      if (!checks) return '<div class="checks"><h4><span class="spin sm"></span>Running checks…</h4></div>';
+      if (checks.error) return '<div class="checks bad"><h4>' + ic('error') + 'Couldn’t run the checks</h4><ul><li>' + esc(checks.error) + '</li></ul></div>';
+      var out = '';
+      if (checks.blockers.length) out += '<div class="checks bad"><h4>' + ic('block') + 'Fix before sending</h4><ul>' + checks.blockers.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul></div>';
+      if (checks.warnings.length) out += '<div class="checks warn"><h4>' + ic('warning') + 'Worth a look</h4><ul>' + checks.warnings.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul></div>';
+      if (!out) out = '<div class="checks ok"><h4>' + ic('check_circle', 'fill') + 'All checks passed</h4></div>';
+      return out;
     }
-    var r = parseRecipients(d.recipients)[0] || { name: 'Jane Doe', email: 'jane@example.com' };
-    var html = '<p style="margin-top:0">As <b>' + esc(r.name || r.email) + '</b> will see it' +
-      (parseRecipients(d.recipients).length ? '' : ' (sample recipient)') + '.</p>' +
-      '<div class="preview-mail"><div class="ph"><b>' + esc(render(d.subject, r) || '(no subject)') + '</b><br>To: ' + esc(r.email) + '</div>' +
-      esc(withSignature(render(d.body, r))) + '</div>';
-    d.followUps.forEach(function (s, i) {
-      html += '<div class="preview-mail"><div class="ph">Follow-up ' + (i + 1) + ' · ' + esc(condLabel(s.condition)) + ' · after ' + esc(waitLabel(s)) +
-        ' · Re: ' + esc(render(d.subject, r)) + '</div>' + esc(withSignature(render(s.message || B.defaultTemplate, r))) + '</div>';
+    function emailHtml(r) {
+      var subj = isThread ? d.thread.subject : render(d.subject, r);
+      var who = '<div class="who"><div class="avatar">' + esc((B.me.displayName || B.me.email || '?').charAt(0).toUpperCase()) + '</div><div><b>' +
+        esc(B.me.displayName || B.me.email) + '</b> <span style="color:var(--ink-3);font-size:12px">&lt;' + esc(B.me.email) + '&gt;</span><small>to ' + esc(r.email) + '</small></div></div>';
+      var html = '';
+      if (!isThread) {
+        html += '<div class="email' + (mobile ? ' mobile' : '') + '"><span class="tag">First email · sent right away</span><div class="sj">' + esc(subj || '(no subject)') + '</div>' + who +
+          '<div class="tx">' + esc(withSignature(render(d.body, r)) || '(empty)') + '</div></div>';
+      }
+      d.followUps.forEach(function (s, i) {
+        var when = checks && checks.schedule && checks.schedule[i] ? 'about ' + checks.schedule[i].when : 'after ' + waitLabel(s);
+        html += '<div class="email' + (mobile ? ' mobile' : '') + '"><span class="tag">Follow-up ' + (i + 1) + ' · ' + esc(condLabel(s.condition)) + ' · ' + esc(when) + '</span>' +
+          '<div class="sj" style="font-size:16px">' + esc(/^re:/i.test(subj) ? subj : 'Re: ' + subj) + '</div>' + who +
+          '<div class="tx">' + esc(withSignature(render(s.message || B.defaultTemplate, r))) + '</div></div>';
+      });
+      return html || '<p>Nothing to show yet.</p>';
+    }
+    function draw() {
+      var r = recips[idx];
+      var ok = checks && !checks.error && !checks.blockers.length;
+      drawer.innerHTML = '<header><h2>Preview</h2><button class="ibtn" title="Close" data-x>' + ic('close') + '</button></header>' +
+        '<div class="bar2"><div class="seg"><button data-dev="0" class="' + (mobile ? '' : 'on') + '" title="Desktop">' + ic('computer') + '</button>' +
+        '<button data-dev="1" class="' + (mobile ? 'on' : '') + '" title="Phone">' + ic('smartphone') + '</button></div>' +
+        '<div class="pager">' + (sample ? 'Sample recipient' : '<button class="ibtn sm" data-pg="-1"' + (idx ? '' : ' disabled') + '>' + ic('chevron_left') + '</button>' +
+          (idx + 1) + ' of ' + recips.length + '<button class="ibtn sm" data-pg="1"' + (idx < recips.length - 1 ? '' : ' disabled') + '>' + ic('chevron_right') + '</button>') + '</div></div>' +
+        '<div class="content">' + checksHtml() + emailHtml(r) +
+          (d.followUps.length ? '<p class="hint" style="text-align:center">Follow-ups go out as replies on the same thread and stop when ' + esc(firstNameOf(r.name) || 'they') + ' replies.</p>' : '') + '</div>' +
+        '<footer>' + (isSeq ? '<span class="why">Sequences are saved, not sent.</span><button class="btn" data-x>Close</button>'
+          : (isThread ? '' : '<button class="btn" data-test>' + ic('outgoing_mail') + 'Send me a test</button>') +
+            '<button class="btn primary" data-send' + (ok && !sample ? '' : ' disabled') + '>' + ic(isThread ? 'schedule_send' : 'send') + esc(sendLabel) + '</button>') + '</footer>';
+    }
+    drawer.addEventListener('click', function (e) {
+      var t = e.target.closest('button'); if (!t || t.disabled) return;
+      if (t.hasAttribute('data-x')) return close();
+      if (t.hasAttribute('data-dev')) { mobile = t.getAttribute('data-dev') === '1'; return draw(); }
+      if (t.hasAttribute('data-pg')) { idx = Math.max(0, Math.min(recips.length - 1, idx + (+t.getAttribute('data-pg')))); return draw(); }
+      if (t.hasAttribute('data-test')) return sendTest(-1, t);
+      if (t.hasAttribute('data-send')) {
+        t.disabled = true; t.innerHTML = '<span class="spin sm"></span>' + (isThread ? 'Scheduling…' : 'Sending…');
+        (isThread ? doSchedule() : doSend()).then(close).catch(function (err) { toast(err.message, 8000); draw(); });
+      }
     });
-    return html;
+    draw();
+    if (!isSeq) {
+      call('studioPreview', previewPayload()).then(function (res) { checks = res; draw(); })
+        .catch(function (err) { checks = { error: err.message, blockers: [], warnings: [] }; draw(); });
+    }
   }
 
-  function validateCampaign() {
-    var d = draft, n = parseRecipients(d.recipients).length;
-    if (!n) return 'Add at least one recipient.';
-    if (n > B.maxRecipients) return 'Up to ' + B.maxRecipients + ' recipients per send.';
-    if (!d.subject.trim()) return 'Add a subject.';
-    if (!d.body.trim()) return 'Write your first email.';
-    return stepProblem(d.followUps);
+  function sendTest(step, btn) {
+    var d = draft;
+    if (!d.subject.trim() || (step < 0 && !d.body.trim())) return toast('Write a subject and an email first.');
+    if (btn) btn.disabled = true;
+    call('studioSendTest', { step: step, recipients: d.recipients, subject: d.subject, body: d.body, followUps: stepsPayload(d.followUps) })
+      .then(function (r) { toast(r.dryRun ? 'Test mode is on, so the test wasn’t sent.' : 'Test sent to ' + r.to + '. Check your inbox.', 6000); })
+      .catch(function (err) { toast(err.message, 7000); })
+      .then(function () { if (btn) btn.disabled = false; });
   }
 
-  function confirmSend() {
-    var problem = validateCampaign();
-    if (problem) return toast(problem);
-    var d = draft, n = parseRecipients(d.recipients).length;
-    modal({
-      title: 'Send ' + n + ' email' + (n === 1 ? '' : 's') + ' now?',
-      html: '<p style="margin-top:0">From <b>' + esc(B.me.email) + '</b>. Each recipient gets their own thread.</p>' +
-        (d.followUps.length
-          ? '<p>Then up to <b>' + d.followUps.length + ' follow-up' + (d.followUps.length === 1 ? '' : 's') + '</b> as replies on each thread (' +
-            esc(describe(d.followUps).replace(/^\d+ follow-ups? · /, '')) + '), stopping when they reply.</p>'
-          : '<p>No follow-ups are set — just this email.</p>') +
-        (B.health.running ? '' : '<p style="color:var(--bad)"><b>The scheduler isn\'t running</b>, so follow-ups won\'t go out until you fix it in Settings.</p>'),
-      actions: [
-        { label: 'Cancel', cls: 'ghost' },
-        { label: 'Send now', cls: 'primary', onClick: function (el, btn) {
-          btn.textContent = 'Sending…';
-          return call('studioSendCampaign', {
-            recipients: d.recipients, subject: d.subject, body: d.body, followUps: stepsPayload(d.followUps),
-            campaignName: d.campaignName, cc: d.cc, bcc: d.bcc, tz: d.tz
-          }).then(function (res) {
-            B.campaigns = res.campaigns;
-            if (res.notArmed && res.notArmed.length) {
-              toast('Sent, but follow-ups could not be scheduled for ' + res.notArmed.map(function (x) { return x.email; }).join(', ') +
-                ' — open the thread in Gmail and click Start in the sidebar. (' + res.notArmed[0].armError + ')', 12000);
-            }
-            if (res.failed.length) {
-              // Keep the failures in the draft so they can be fixed and resent.
-              draft.recipients = res.failed.map(function (f) { return f.email; }).join('\n');
-              persistDraft();
-              toast('Sent ' + res.sent + '. ' + res.failed.length + ' failed: ' + res.failed[0].email + ' — ' + res.failed[0].error, 9000);
-              drawCompose();
-            } else {
-              draft = blankDraft('campaign'); store(DRAFT_KEY, null);
-              if (!(res.notArmed && res.notArmed.length)) toast((res.dryRun ? 'Dry run: would have sent ' : 'Sent ') + res.sent + ' email' + (res.sent === 1 ? '' : 's') +
-                (d.followUps.length ? '. Follow-ups scheduled.' : '.') + (res.schedulerOk ? '' : ' Scheduler is NOT running.'), 6000);
-              go('#campaigns');
-            }
-            return false;
-          });
-        } }
-      ]
+  function doSend() {
+    var d = draft;
+    return call('studioSendCampaign', {
+      recipients: d.recipients, subject: d.subject, body: d.body, followUps: stepsPayload(d.followUps),
+      campaignName: d.campaignName, cc: d.cc, bcc: d.bcc, tz: d.tz
+    }).then(function (res) {
+      if (res.failed.length) {
+        // Keep only the failures so they can be fixed and resent without doubling up.
+        draft.recipients = res.failed.map(function (f) { return f.email; }).join('\n');
+        persistDraft();
+        toast('Sent ' + res.sent + '. ' + res.failed.length + ' failed: ' + res.failed[0].email + ': ' + res.failed[0].error, 10000);
+      } else {
+        draft = blankDraft('campaign'); store(DRAFT_KEY, null);
+        toast(res.dryRun ? 'Test mode: nothing was sent (' + plural(res.sent, 'email') + ' would have gone out).'
+          : 'Sent ' + plural(res.sent, 'email') + (d.followUps.length ? '. Follow-ups are scheduled.' : '.') +
+            (res.schedulerOk ? '' : ' But the scheduler isn’t running: fix it in Settings.'), 7000);
+      }
+      if (res.notArmed && res.notArmed.length) {
+        toast('Sent, but follow-ups couldn’t be scheduled for ' + res.notArmed.map(function (x) { return x.email; }).join(', ') +
+          '. Use “Follow up a sent email” to add them. (' + res.notArmed[0].armError + ')', 12000);
+      }
+      return refreshState().then(function () { res.failed.length ? drawCompose() : go('#campaigns'); });
+    });
+  }
+
+  function doSchedule() {
+    var d = draft;
+    var prob = stepProblem(d.followUps);
+    if (prob) return Promise.reject(new Error(prob));
+    return call('studioScheduleOnThread', {
+      threadId: d.threadId, followUps: stepsPayload(d.followUps), recipients: d.recipients,
+      cc: d.cc, bcc: d.bcc, tz: d.tz, campaignName: d.campaignName
+    }).then(function (res) {
+      var n = d.followUps.length;
+      d.thread = res.thread; d.followUps = [];
+      toast('Scheduled ' + plural(n, 'follow-up') + '.' + (res.schedulerOk ? '' : ' The scheduler isn’t running: fix it in Settings.'), 6000);
+      return refreshState().then(function () { renderRail('thread'); drawCompose(); });
     });
   }
 
   function saveSequenceFromDraft(name, originalName) {
     var d = draft;
     if (d.followUps.some(function (s) { return s.unit === 'date'; })) {
-      return Promise.reject(new Error('Sequences can’t include “on a date” follow-ups — switch those to a wait first.'));
+      return Promise.reject(new Error('A sequence can’t have “on a date” follow-ups. Switch those to a wait first.'));
     }
     var problem = stepProblem(d.followUps);
     if (problem) return Promise.reject(new Error(problem));
-    return call('studioSaveSequence', {
-      name: name, originalName: originalName || '', subject: d.subject, firstMessage: d.body, steps: d.followUps
-    }).then(function (seqs) { B.sequences = seqs; return seqs; });
+    return call('studioSaveSequence', { name: name, originalName: originalName || '', subject: d.subject, firstMessage: d.body, steps: d.followUps })
+      .then(function (seqs) { B.sequences = seqs; return seqs; });
   }
-
   function askSequenceName(cb) {
+    var overwrite = false;
     modal({
       title: 'Save as a sequence',
-      html: '<p style="margin-top:0">Saves your subject, first email and ' + draft.followUps.length + ' follow-up(s). ' +
-        'Reuse it in the Studio or start it on any Gmail thread from the sidebar.</p>' +
-        '<div class="field"><label>Name</label><input id="seqName" placeholder="e.g. Cold outreach — 3 bumps"></div>',
+      html: '<p style="margin-top:0">Saves your subject, first email and ' + plural(draft.followUps.length, 'follow-up') + ' to reuse in any campaign or on a sent email.</p>' +
+        '<div class="field"><label>Name</label><input id="seqName" placeholder="e.g. Cold outreach, 3 follow-ups"></div>',
       actions: [
-        { label: 'Cancel', cls: 'ghost' },
+        { label: 'Cancel', cls: 'text' },
         { label: 'Save', cls: 'primary', onClick: function (el) {
           var name = $('#seqName', el).value.trim();
           if (!name) { toast('Give it a name.'); return true; }
-          var exists = B.sequences.some(function (s) { return s.name === name; });
-          if (exists && !window.__overwriteOk) { window.__overwriteOk = true; toast('“' + name + '” exists — click Save again to replace it.'); return true; }
-          window.__overwriteOk = false;
-          return saveSequenceFromDraft(name, '').then(function () { cb && cb(name); return false; });
+          if (!overwrite && B.sequences.some(function (s) { return s.name === name; })) { overwrite = true; toast('“' + name + '” already exists. Click Save again to replace it.'); return true; }
+          return saveSequenceFromDraft(name, '').then(function () { cb(name); return false; });
         } }
       ]
     });
   }
 
-  var menuEl = null;
+  // ───── Menus ─────
+  var menuEl = null, lastField = null;
   function closeMenus() { if (menuEl && menuEl.parentNode) menuEl.parentNode.removeChild(menuEl); menuEl = null; }
-  var lastField = null;
-  function varsMenu(btn, i) {
+  function openMenu(btn, items) {
     closeMenus();
     var r = btn.getBoundingClientRect();
     menuEl = document.createElement('div');
     menuEl.className = 'menu';
-    menuEl.style.top = (window.scrollY + r.bottom + 4) + 'px';
-    menuEl.style.left = (window.scrollX + r.left) + 'px';
-    menuEl.innerHTML = [['{firstName}', 'Recipient’s first name (or “there”)'], ['{senderFirstName}', 'Your first name']].map(function (v) {
-      return '<button data-var="' + v[0] + '" data-i="' + i + '">' + v[0] + '<small>' + v[1] + '</small></button>';
+    menuEl.innerHTML = items.map(function (it, k) {
+      return '<button data-mi="' + k + '">' + (it.icon ? ic(it.icon) : '') + '<span>' + esc(it.label) + (it.sub ? '<small>' + esc(it.sub) + '</small>' : '') + '</span></button>';
     }).join('');
     document.body.appendChild(menuEl);
+    var left = Math.min(r.left, window.innerWidth - menuEl.offsetWidth - 8);
+    var top = r.bottom + 4;
+    if (top + menuEl.offsetHeight > window.innerHeight - 8) top = Math.max(8, r.top - menuEl.offsetHeight - 4);
+    menuEl.style.left = left + 'px'; menuEl.style.top = top + 'px';
+    menuEl.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-mi]'); if (!b) return;
+      var it = items[+b.getAttribute('data-mi')]; closeMenus(); it.run();
+    });
   }
   function insertVar(token, i) {
     var target = (lastField && document.body.contains(lastField)) ? lastField
@@ -845,49 +1226,73 @@
     var s = target.selectionStart != null ? target.selectionStart : target.value.length;
     var e = target.selectionEnd != null ? target.selectionEnd : s;
     target.value = target.value.slice(0, s) + token + target.value.slice(e);
-    target.focus();
-    target.setSelectionRange(s + token.length, s + token.length);
+    target.focus(); target.setSelectionRange(s + token.length, s + token.length);
     target.dispatchEvent(new Event('input', { bubbles: true }));
   }
+  function seqMenu(btn) {
+    var items = B.sequences.map(function (s) { return { icon: 'account_tree', label: s.name, sub: describe(s.steps), run: function () { applySequence(s); } }; })
+      .concat(PRESETS.map(function (p) {
+        return { icon: 'bolt', label: 'Quick: ' + p[0] + ' days', sub: '3 follow-ups with your default message', run: function () { applySequence({ name: p[0] + ' days', steps: presetSteps(p[1]) }); } };
+      }));
+    openMenu(btn, items);
+  }
 
-  // ───── Settings page ─────
+  // ───── Sequences ─────
+  function pageSequences() {
+    var seqs = B.sequences;
+    var html = '<div class="head"><h1>Sequences</h1><div class="acts"><button class="btn primary" data-go="sequence/">' + ic('add') + 'New sequence</button></div></div>';
+    if (!seqs.length) {
+      html += '<div class="empty"><div class="art">' + ic('account_tree') + '</div><h2>Write your follow-ups once</h2>' +
+        '<p>A sequence is a set of follow-up emails. Add it to any campaign, or start it on a sent email, in one click.</p>' +
+        '<button class="btn primary" data-go="sequence/">' + ic('add') + 'Create a sequence</button></div>';
+    } else {
+      html += '<div class="grid">' + seqs.map(function (s, i) {
+        var prev = (s.steps[0] && s.steps[0].message) || s.firstMessage || '';
+        return '<div class="seq-card"><h3>' + esc(s.name) + '</h3><div class="m">' + esc(describe(s.steps)) + '</div>' +
+          '<div class="p">' + esc(prev.replace(/\s+/g, ' ') || 'Uses your default follow-up message.') + '</div>' +
+          '<div class="b"><button class="btn sm primary" data-act="use-seq" data-i="' + i + '">Use in a campaign</button>' +
+          '<button class="btn sm" data-go="sequence/' + esc(encodeURIComponent(s.name)) + '">Edit</button>' +
+          '<button class="ibtn sm" title="Delete" style="margin-left:auto" data-act="del-seq" data-i="' + i + '">' + ic('delete') + '</button></div></div>';
+      }).join('') + '</div>';
+    }
+    $('#page').innerHTML = html;
+  }
+
+  // ───── Settings ─────
   function pageSettings() {
     var h = B.health;
-    $('#page').innerHTML = '<div class="page-head"><h1>Settings</h1></div>' + healthBanner() +
-      '<div class="settings"><div class="card"><h3>You</h3>' +
-      '<div class="field"><label>Display name (the From: line)</label><input id="sName" value="' + esc(B.me.displayName) + '" placeholder="Blank = your Gmail name"></div>' +
+    $('#page').innerHTML = '<div class="head"><h1>Settings</h1></div>' + healthBanner() +
+      '<div class="settings"><div class="card"><h3>How your emails look</h3>' +
+      '<div class="field"><label>Your name on the From line</label><input id="sName" value="' + esc(B.me.displayName) + '" placeholder="Blank = your Gmail name"></div>' +
       '<div class="field"><label>First name for {senderFirstName}</label><input id="sFirst" value="' + esc(B.me.firstName) + '"></div>' +
-      '<div class="field"><label>Signature (added to every email)</label><textarea id="sSig" rows="5" placeholder="Leave blank for none">' + esc(B.signature) + '</textarea></div>' +
+      '<div class="field"><label>Signature, added to every email</label><textarea id="sSig" rows="5" placeholder="Leave blank for none">' + esc(B.signature) + '</textarea></div>' +
       '<div class="field"><label>Time zone</label><select id="sTz">' + B.tzChoices.map(function (t) {
         return '<option value="' + esc(t.value) + '"' + (t.value === B.tz ? ' selected' : '') + '>' + esc(t.label) + '</option>'; }).join('') + '</select></div>' +
       '<button class="btn primary" data-act="save-settings">Save</button></div>' +
-      '<div class="card"><h3>Scheduler</h3>' +
+      '<div class="card"><h3>Sending</h3>' +
       '<div class="kv"><span>Status</span><span style="color:' + (h.running ? 'var(--ok)' : 'var(--bad)') + '">' + (h.running ? 'Running' : 'Not running') + '</span></div>' +
-      '<div class="kv"><span>Checks every</span><span>' + h.interval + ' min</span></div>' +
+      '<div class="kv"><span>Checks for due follow-ups</span><span>every ' + h.interval + ' min</span></div>' +
       '<div class="kv"><span>Sending as</span><span>' + esc(h.account || 'unknown') + '</span></div>' +
-      '<div class="kv"><span>Last check</span><span>' + (h.lastRunAgo ? esc(h.lastRunAgo) + ' ago · sent ' + h.lastRunSent : 'not yet') + '</span></div>' +
+      '<div class="kv"><span>Last check</span><span>' + (h.lastRunAgo ? esc(h.lastRunAgo) + ' ago, sent ' + h.lastRunSent : 'not yet') + '</span></div>' +
       (h.lastRunErrors || []).map(function (e) { return '<div class="hint" style="color:var(--bad)">' + esc(e) + '</div>'; }).join('') +
-      '<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button class="btn sm" data-act="fix">' + (h.running ? 'Re-check' : 'Fix scheduler') + '</button>' +
-      '<button class="btn sm" data-act="run-now">Send due now</button></div></div></div>' + teamHtml();
+      '<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button class="btn sm" data-act="fix">' + (h.running ? 'Re-check' : 'Fix it') + '</button>' +
+      '<button class="btn sm" data-act="run-now">Send what’s due now</button></div></div></div>' + teamHtml();
   }
-
-  // Owner only: who on the team has set the tool up, and is their robot running.
   function teamHtml() {
     if (!B.team) return '';
-    function cell(v) { return v ? '<span class="pill ok">' + esc(v) + '</span>' : '<span class="pill gray">Not yet</span>'; }
-    return '<div class="card" style="margin-top:24px"><div style="display:flex;align-items:center;padding:16px 16px 4px"><h3 style="margin:0;font-size:16px">Team</h3>' +
-      '<button class="btn ghost sm" data-act="refresh-team" style="margin-left:auto">Refresh</button></div>' +
-      '<p class="hint" style="padding:0 16px">Everyone who has opened the tool. Status only — you never see their emails.</p>' +
+    function cell(v) { return v ? '<span class="pill completed">' + esc(v) + '</span>' : '<span class="pill grey">not yet</span>'; }
+    return '<div class="section-h" style="margin-top:24px">Team<button class="btn sm text" data-act="refresh-team" style="margin-left:auto">Refresh</button></div>' +
+      '<p class="hint" style="margin:-4px 0 8px">Everyone who has opened the tool. Status only: you never see their emails.</p>' +
       (B.team.length
-        ? '<table><thead><tr><th>Person</th><th>Studio opened</th><th>Gmail sidebar</th><th>Robot</th><th>Last check</th></tr></thead><tbody>' +
+        ? '<div class="card"><table><thead><tr><th>Person</th><th>Studio</th><th>Gmail sidebar</th><th>Sending</th><th>Last check</th></tr></thead><tbody>' +
           B.team.map(function (m) {
-            return '<tr><td><div>' + esc(m.name || m.email) + '</div><div class="sub">' + esc(m.email) + '</div></td>' +
+            return '<tr><td class="name"><div>' + esc(m.name || m.email) + '</div><div class="s">' + esc(m.email) + '</div></td>' +
               '<td>' + cell(m.studio) + '</td><td>' + cell(m.sidebar) + '</td>' +
-              '<td>' + (m.running ? '<span class="pill ok">Running</span>' : '<span class="pill warn">Not running</span>') + '</td>' +
-              '<td>' + (m.lastRun ? esc(m.lastRun) + ' · sent ' + m.lastRunSent : '<span class="sub">no check yet</span>') +
-              (m.lastRunError ? '<div class="sub" style="color:var(--bad)">' + esc(m.lastRunError) + '</div>' : '') + '</td></tr>';
-          }).join('') + '</tbody></table>'
-        : '<p style="padding:0 16px 16px">Nobody yet.</p>') + '</div>';
+              '<td>' + (m.running ? '<span class="pill active">running</span>' : '<span class="pill stopped">not running</span>') + '</td>' +
+              '<td class="num">' + (m.lastRun ? esc(m.lastRun) + ' · sent ' + m.lastRunSent : '–') +
+              (m.lastRunError ? '<div class="hint" style="color:var(--bad)">' + esc(m.lastRunError) + '</div>' : '') + '</td></tr>';
+          }).join('') + '</tbody></table></div>'
+        : '<p>Nobody yet.</p>');
   }
 
   // ───── Events ─────
@@ -895,7 +1300,7 @@
     var t = e.target;
     if (!draft) return;
     var k = t.getAttribute('data-k'), fk = t.getAttribute('data-fk');
-    if (k) { draft[k] = t.value; }
+    if (k) draft[k] = t.value;
     else if (fk) {
       var i = +t.getAttribute('data-i');
       draft.followUps[i][fk] = fk === 'amount' ? (parseInt(t.value, 10) || 0) : t.value;
@@ -903,19 +1308,10 @@
     if (t.tagName === 'TEXTAREA') autosize(t);
     if (k === 'subject' || fk) refreshSummary();
     persistDraft();
-    var sv = $('#saving'); if (sv && draft.mode === 'campaign') sv.textContent = 'Draft saved on this device';
+    var sv = $('#saved'); if (sv && draft.mode === 'campaign') sv.innerHTML = ic('cloud_done') + 'Draft saved';
   });
   document.addEventListener('change', function (e) {
     var t = e.target;
-    if (t.id === 'seqPick' && t.value !== '') {
-      var v = t.value, seq;
-      t.value = '';
-      if (v.indexOf('p:') === 0) {
-        PRESETS.forEach(function (p) { if ('p:' + p[0] === v) seq = { name: p[0] + ' days', steps: presetSteps(p[1]) }; });
-      } else seq = B.sequences[+v];
-      if (seq) applySequence(seq);
-      return;
-    }
     if (t.getAttribute('data-fk') || t.getAttribute('data-k')) t.dispatchEvent(new Event('input', { bubbles: true }));
     if (t.getAttribute('data-fk') === 'unit') {
       var st = draft.followUps[+t.getAttribute('data-i')];
@@ -925,86 +1321,101 @@
     }
   });
   document.addEventListener('submit', function (e) {
-    if (e.target.id === 'tsearch') { e.preventDefault(); threadQuery = $('#tq').value.trim(); loadThreads(); $('#tlist').innerHTML = '<div class="loading" style="height:160px"><div class="spin"></div>Searching…</div>'; }
+    if (e.target.id === 'tsearch') {
+      e.preventDefault(); threadQuery = $('#tq').value.trim();
+      $('#tlist').innerHTML = '<div class="loading" style="height:160px"><div class="spin"></div>Searching…</div>'; loadThreads();
+    }
   });
   document.addEventListener('focusin', function (e) {
     var t = e.target;
-    if (t.matches && t.matches('textarea.body, .row input[data-k="subject"]')) lastField = t;
+    if (t.matches && t.matches('textarea.body, .fld input[data-k="subject"]')) lastField = t;
   });
 
   document.addEventListener('click', function (e) {
-    // Apps Script serves the page in a sandboxed iframe with <base target="_top">,
-    // so a plain href="#x" would navigate Google's outer page instead of ours.
+    if (menuEl && !e.target.closest('.menu') && !e.target.closest('[data-act="vars"],[data-act="more"],[data-act="fu-more"],[data-act="load-seq"]')) closeMenus();
+    // Apps Script serves the page with <base target="_top">, so in-page links
+    // must never reach the browser.
     var link = e.target.closest('a[href^="#"]');
-    if (link) {
-      e.preventDefault();
-      go(link.getAttribute('href'));
-      return;
-    }
-    var row = e.target.closest('[data-thread]');
-    if (row) { go('#thread/' + row.getAttribute('data-thread')); return; }
-    var v = e.target.closest('[data-var]');
-    if (v) { insertVar(v.getAttribute('data-var'), +v.getAttribute('data-i')); closeMenus(); return; }
-    if (menuEl && !e.target.closest('.menu') && !e.target.closest('[data-act="vars"]')) closeMenus();
+    if (link) { e.preventDefault(); go(link.getAttribute('href')); return; }
+    var nav = e.target.closest('[data-go]');
+    if (nav && !e.target.closest('[data-act]') && !e.target.closest('a[href]')) { go('#' + nav.getAttribute('data-go')); return; }
+    var tab = e.target.closest('[data-tab]');
+    if (tab) { listTab = tab.getAttribute('data-tab'); pageCampaigns(); return; }
 
     var a = e.target.closest('[data-act]');
-    if (!a) return;
-    var act = a.getAttribute('data-act');
-    var i = +a.getAttribute('data-i');
+    if (!a || a.disabled) return;
+    var act = a.getAttribute('data-act'), i = +a.getAttribute('data-i');
 
     if (act === 'add-fu') {
       draft.followUps.push(newStep(draft.followUps[draft.followUps.length - 1]));
       persistDraft(); drawCompose();
-      var last = $all('.fu-card'); if (last.length) { last[last.length - 1].scrollIntoView({ behavior: 'smooth', block: 'center' }); $('textarea', last[last.length - 1]).focus(); }
-    } else if (act === 'rm-fu') {
-      draft.followUps.splice(i, 1); persistDraft(); drawCompose();
+      var cards = $all('.fu-card'); if (cards.length) { cards[cards.length - 1].scrollIntoView({ behavior: 'smooth', block: 'center' }); $('textarea', cards[cards.length - 1]).focus(); }
     } else if (act === 'toggle-cc') {
       var fu = draft.followUps[i];
       fu.showCc = !(fu.showCc || fu.cc || fu.bcc);
       if (!fu.showCc) { fu.cc = ''; fu.bcc = ''; }
       persistDraft(); drawCompose();
-    } else if (act === 'schedule') {
-      if (!draft.followUps.length) return toast('Add a follow-up or pick a sequence first.');
-      var prob = stepProblem(draft.followUps);
-      if (prob) return toast(prob);
-      a.disabled = true; a.textContent = 'Scheduling…';
-      call('studioScheduleOnThread', {
-        threadId: draft.threadId, followUps: stepsPayload(draft.followUps), recipients: draft.recipients,
-        cc: draft.cc, bcc: draft.bcc, tz: draft.tz, campaignName: draft.campaignName
-      }).then(function (res) {
-        B.campaigns = res.campaigns;
-        var n = draft.followUps.length;
-        draft.thread = res.thread; draft.followUps = [];
-        drawCompose();
-        toast('Scheduled ' + n + ' follow-up' + (n === 1 ? '' : 's') + '.' + (res.schedulerOk ? '' : ' Scheduler is NOT running — fix it in Settings.'), 6000);
-      }).catch(function (err) { a.disabled = false; a.textContent = 'Schedule follow-ups'; toast(err.message, 7000); });
-    } else if (act === 'rm-q') {
-      a.disabled = true;
-      call('studioRemoveStep', draft.threadId, i).then(function (res) {
-        B.campaigns = res.campaigns; draft.thread = res.thread; drawCompose(); toast('Removed.');
-      }).catch(function (err) { a.disabled = false; toast(err.message, 6000); });
-    } else if (act === 'cancel-thread') {
-      modal({ title: 'Cancel all follow-ups on this email?', html: '<p style="margin-top:0">Nothing else will be sent on this thread.</p>', actions: [
-        { label: 'Keep', cls: 'ghost' },
-        { label: 'Cancel all', cls: 'primary', onClick: function () {
-          return call('studioCancelThread', draft.threadId).then(function (res) {
-            B.campaigns = res.campaigns; draft.thread = res.thread; drawCompose(); toast('Cancelled.'); return false;
-          });
-        } }
-      ] });
     } else if (act === 'vars') {
-      varsMenu(a, i);
+      openMenu(a, [['{firstName}', 'Their first name (or “there”)'], ['{senderFirstName}', 'Your first name']].map(function (v) {
+        return { icon: 'data_object', label: v[0], sub: v[1], run: function () { insertVar(v[0], i); } };
+      }));
+    } else if (act === 'more') {
+      var items = [];
+      if (draft.mode === 'campaign') {
+        items.push({ icon: 'group', label: 'Select recipients', run: editRecipients });
+        items.push({ icon: 'group_add', label: draft.showCc || draft.cc || draft.bcc ? 'Hide Cc / Bcc' : 'Add Cc / Bcc', run: function () {
+          draft.showCc = !(draft.showCc || draft.cc || draft.bcc); if (!draft.showCc) { draft.cc = ''; draft.bcc = ''; } persistDraft(); drawCompose(); } });
+        items.push({ icon: 'outgoing_mail', label: 'Send me a test', run: function () { sendTest(-1); } });
+      }
+      items.push({ icon: 'account_tree', label: 'Use a saved sequence', run: function () { seqMenu(a); } });
+      openMenu(a, items);
+    } else if (act === 'fu-more') {
+      var f = draft.followUps[i];
+      openMenu(a, [
+        { icon: 'group_add', label: (f.showCc || f.cc || f.bcc) ? 'Remove Cc / Bcc' : 'Cc / Bcc on this follow-up', run: function () {
+          f.showCc = !(f.showCc || f.cc || f.bcc); if (!f.showCc) { f.cc = ''; f.bcc = ''; } persistDraft(); drawCompose(); } }
+      ].concat(draft.mode === 'campaign' ? [{ icon: 'outgoing_mail', label: 'Send me a test of this follow-up', run: function () { sendTest(i); } }] : [])
+       .concat([{ icon: 'delete', label: 'Remove this follow-up', run: function () { draft.followUps.splice(i, 1); persistDraft(); drawCompose(); } }]));
+    } else if (act === 'load-seq') {
+      seqMenu(a);
+    } else if (act === 'autopilot') {
+      openAutopilot();
+    } else if (act === 'test') {
+      sendTest(i, a);
     } else if (act === 'recipients') {
       editRecipients();
     } else if (act === 'preview') {
-      modal({ title: 'Preview', html: previewHtml() });
-    } else if (act === 'send') {
-      confirmSend();
+      openPreview();
+    } else if (act === 'review') {
+      var problem = draft.mode === 'thread'
+        ? (!draft.followUps.length ? 'Add a follow-up or use a saved sequence first.' : stepProblem(draft.followUps))
+        : stepProblem(draft.followUps);
+      if (problem) return toast(problem);
+      openPreview();
+    } else if (act === 'rm-q') {
+      a.disabled = true;
+      call('studioRemoveStep', draft.threadId, i).then(function (res) {
+        B.campaigns = res.campaigns; draft.thread = res.thread; drawCompose(); toast('Removed.'); refreshState().then(function () { renderRail('thread'); });
+      }).catch(function (err) { a.disabled = false; toast(err.message, 6000); });
+    } else if (act === 'cancel-thread') {
+      confirmBox('Cancel every follow-up on this email?', 'Nothing else will be sent on this thread.', 'Cancel all', function () {
+        return call('studioCancelThread', draft.threadId).then(function (res) {
+          draft.thread = res.thread; return refreshState().then(function () { renderRail('thread'); drawCompose(); toast('Cancelled.'); return false; });
+        });
+      });
+    } else if (act === 'stop-campaign') {
+      confirmBox('Stop this campaign?', 'No more follow-ups will go out to anyone in “' + esc(report.name) + '”. Emails already sent stay sent.', 'Stop all', function () {
+        return call('studioStopCampaign', report.id).then(function (s) { setState(s); toast('Stopped.'); route(); return false; });
+      });
+    } else if (act === 'stop-one') {
+      var p = report.people[i];
+      confirmBox('Stop follow-ups to ' + esc(p.email) + '?', 'Nothing else will be sent on their thread.', 'Stop', function () {
+        return call('studioCancelCampaign', p.threadId).then(function () { return refreshState(); }).then(function () { toast('Stopped.'); route(); return false; });
+      });
     } else if (act === 'clear-draft') {
-      modal({ title: 'Start over?', html: '<p style="margin-top:0">Clears recipients, subject, email and follow-ups.</p>', actions: [
-        { label: 'Cancel', cls: 'ghost' },
-        { label: 'Clear', cls: 'primary', onClick: function () { draft = blankDraft('campaign'); store(DRAFT_KEY, null); drawCompose(); return false; } }
-      ] });
+      confirmBox('Start over?', 'Clears the recipients, subject, email and follow-ups.', 'Clear', function () {
+        draft = blankDraft('campaign'); store(DRAFT_KEY, null); drawCompose(); return false;
+      });
     } else if (act === 'save-as-seq') {
       if (!draft.followUps.length) return toast('Add at least one follow-up first.');
       askSequenceName(function (name) { toast('Saved sequence “' + name + '”.'); drawCompose(); });
@@ -1013,64 +1424,58 @@
       if (!name) return toast('Give the sequence a name.');
       if (name !== draft.originalName && B.sequences.some(function (s) { return s.name === name; })) return toast('A sequence called “' + name + '” already exists.');
       a.disabled = true;
-      saveSequenceFromDraft(name, draft.originalName).then(function () {
-        toast('Saved “' + name + '”.'); go('#sequences');
-      }).catch(function (err) { a.disabled = false; toast(err.message, 6000); });
+      saveSequenceFromDraft(name, draft.originalName).then(function () { toast('Saved “' + name + '”.'); go('#sequences'); })
+        .catch(function (err) { a.disabled = false; toast(err.message, 6000); });
     } else if (act === 'del-seq-page' || act === 'del-seq') {
       var nm = act === 'del-seq' ? B.sequences[i].name : draft.originalName;
-      modal({ title: 'Delete “' + nm + '”?', html: '<p style="margin-top:0">Campaigns already running keep their follow-ups.</p>', actions: [
-        { label: 'Cancel', cls: 'ghost' },
-        { label: 'Delete', cls: 'primary', onClick: function () {
-          return call('studioDeleteSequence', nm).then(function (seqs) { B.sequences = seqs; toast('Deleted.'); go('#sequences'); pageSequences(); return false; });
-        } }
-      ] });
+      confirmBox('Delete “' + esc(nm) + '”?', 'Campaigns already running keep their follow-ups.', 'Delete', function () {
+        return call('studioDeleteSequence', nm).then(function (seqs) { B.sequences = seqs; toast('Deleted.'); go('#sequences'); return false; });
+      });
     } else if (act === 'use-seq') {
       var seq = B.sequences[i];
       if (!draft || draft.mode !== 'campaign') draft = load(DRAFT_KEY) || blankDraft('campaign');
-      go('#new');
-      setTimeout(function () { applySequence(seq); }, 0);
-    } else if (act === 'cancel') {
-      var id = a.getAttribute('data-id');
-      modal({ title: 'Stop these follow-ups?', html: '<p style="margin-top:0">Nothing else will be sent on this thread.</p>', actions: [
-        { label: 'Keep', cls: 'ghost' },
-        { label: 'Stop', cls: 'primary', onClick: function () {
-          return call('studioCancelCampaign', id).then(function (c) { B.campaigns = c; pageCampaigns(); toast('Stopped.'); return false; });
-        } }
-      ] });
+      go('#new'); applySequence(seq);
     } else if (act === 'refresh') {
       a.disabled = true;
-      call('studioBootstrap').then(function (b) { B = b; renderChrome(); pageCampaigns(); });
+      refreshState().then(route).catch(function (err) { toast(err.message); a.disabled = false; });
     } else if (act === 'fix') {
       a.disabled = true;
       call('studioFixScheduler').then(function (r) {
-        B.health = r.health; renderChrome(); route();
-        toast(r.ok ? 'Scheduler is running.' : 'Could not install: ' + r.message, 6000);
+        B.health = r.health; route();
+        toast(r.ok ? 'Follow-ups are on.' : 'Couldn’t switch it on: ' + r.message, 7000);
       }).catch(function (err) { a.disabled = false; toast(err.message, 6000); });
     } else if (act === 'run-now') {
-      a.disabled = true; a.textContent = 'Running…';
+      a.disabled = true; a.textContent = 'Checking…';
       call('studioRunNow').then(function (r) {
-        B.health = r.health; B.campaigns = r.campaigns; renderChrome(); route();
-        toast(r.errors.length ? 'Sent ' + r.sent + ', failed: ' + r.errors[0] : (r.sent ? 'Sent ' + r.sent + ' follow-up(s).' : 'Nothing was due.'), 6000);
+        B.health = r.health; B.campaigns = r.campaigns;
+        return refreshState().then(function () {
+          route();
+          toast(r.errors.length ? 'Sent ' + r.sent + ', failed: ' + r.errors[0] : (r.sent ? 'Sent ' + plural(r.sent, 'follow-up') + '.' : 'Nothing was due.'), 6000);
+        });
       }).catch(function (err) { toast(err.message, 6000); route(); });
     } else if (act === 'refresh-team') {
       a.disabled = true;
-      call('studioBootstrap').then(function (b) { B = b; renderChrome(); pageSettings(); });
+      call('studioBootstrap').then(function (b) { B = b; route(); });
     } else if (act === 'save-settings') {
       a.disabled = true;
       call('studioSaveSettings', { displayName: $('#sName').value, firstName: $('#sFirst').value, signature: $('#sSig').value, tz: $('#sTz').value })
-        .then(function (b) { B = b; renderChrome(); pageSettings(); toast('Saved.'); })
+        .then(function (b) { B = b; route(); toast('Saved.'); })
         .catch(function (err) { a.disabled = false; toast(err.message, 6000); });
     }
   });
 
-
-  call('studioBootstrap').then(function (b) {
-    B = b;
-    renderChrome();
-    route();
-  }).catch(function (err) {
-    $('#page').innerHTML = '<div class="card empty"><h2>Couldn’t load</h2><p>' + esc(err.message) + '</p></div>';
-  });
+  // ?view=new opens the composer straight away (the extension's "New campaign").
+  function start(view) {
+    call('studioBootstrap').then(function (b) {
+      B = b;
+      current = /^(new|threads|sequences|settings|campaigns)$/.test(view || '') ? view : 'campaigns';
+      route();
+    }).catch(function (err) {
+      $('#page').innerHTML = '<div class="empty"><h2>Couldn’t load</h2><p>' + esc(err.message) + '</p></div>';
+    });
+  }
+  try { google.script.url.getLocation(function (loc) { start((loc && loc.parameter && loc.parameter.view) || ''); }); }
+  catch (e) { start(''); }
 })();
 </script>
 </body>

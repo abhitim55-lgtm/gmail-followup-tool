@@ -215,6 +215,7 @@ function processFollowUps() {
   const cutoff = new Date(Date.now() - CONFIG.lookbackDays * 86400000);
   let sent = 0;
   const errors = [];
+  const gate = autopilotGate_();
 
   // Custom multi-step schedules (set via the sidebar UI).
   const customLabel = GmailApp.getUserLabelByName(CONFIG.labelPrefix + '/Custom');
@@ -247,7 +248,15 @@ function processFollowUps() {
         const firstStepIn = data.steps[0].sendAt - Date.now();
         Logger.log('Custom: ' + data.steps.length + ' step(s), first fires in ' + Math.round(firstStepIn / 1000) + 's.');
         if (firstStepIn > 0) continue;
-        if (processCustomThread_(thread, customLabel, data, myEmails, cutoff)) sent++;
+        if (!gate.canSend()) {
+          // Due, but outside the Autopilot window or over today's cap: leave it
+          // queued; a later run inside the next allowed slot sends it.
+          const next = gate.nextSlot();
+          Logger.log('Autopilot: holding due follow-ups until ' +
+            (next === null ? 'a sending day is switched on' : formatLocal_(next)) + '.');
+          break;
+        }
+        if (processCustomThread_(thread, customLabel, data, myEmails, cutoff, gate)) sent++;
       } catch (e) {
         // A failed send used to be logged and forgotten: the step stayed queued,
         // the run looked clean, and the user saw a campaign that never fired.
@@ -315,7 +324,7 @@ function lastRunReport(n) {
 }
 
 
-function processCustomThread_(thread, label, data, myEmails, cutoff) {
+function processCustomThread_(thread, label, data, myEmails, cutoff, gate) {
   const props = PropertiesService.getUserProperties();
   const key = 'custom_' + thread.getId();
   const messages = thread.getMessages();
@@ -417,9 +426,14 @@ function processCustomThread_(thread, label, data, myEmails, cutoff) {
       .replace(/\{senderFirstName\}/g, getSenderFirstName_());
     const text = applySignatureToBody_(rendered);
 
+    // Several steps of one thread can be due together; Autopilot's cap and
+    // delay apply to each of them, not just the first.
+    if (gate && !gate.canSend()) break;
+
     if (CONFIG.dryRun) {
       Logger.log('[DRY RUN custom] Would send to ' + toAddr +
         (ccAddr ? ' (cc ' + ccAddr + ')' : '') + ':\n' + text);
+      if (gate) gate.record();
       break;
     }
 
@@ -442,6 +456,7 @@ function processCustomThread_(thread, label, data, myEmails, cutoff) {
       ' (' + (data.steps.length - 1) + ' remaining).');
     data.steps.splice(idx, 1);
     sentAny = true;
+    if (gate) gate.record();
   }
 
   if (data.steps.length === 0) {
@@ -719,6 +734,138 @@ function isBusinessHours_() {
   if (CONFIG.skipWeekends && (day === 0 || day === 6)) return false;
   const hour = now.getHours();
   return hour >= 9 && hour < 18;
+}
+
+
+// ───────── Autopilot ─────────────────────────────────────────────
+//
+// Per-account sending rules, like Mailmeteor's Autopilot: which days and hours
+// follow-ups may go out (in the preferred timezone), how many per day, and a
+// minimum gap between two sends. Off by default. When on, a due follow-up that
+// falls outside a window or over the daily cap simply stays queued and goes
+// out on the first run inside the next allowed slot — nothing is dropped.
+
+const AUTOPILOT_KEY = 'autopilot';
+const AUTOPILOT_STATE_KEY = 'autopilotState'; // { day: 'yyyy-MM-dd', count, lastAt }
+const AUTOPILOT_MAX_PER_DAY = 2000;
+const AUTOPILOT_MAX_DELAY_MIN = 120;
+
+function defaultAutopilot_() {
+  const days = [];
+  for (let d = 0; d < 7; d++) days.push({ on: d >= 1 && d <= 5, from: '09:00', to: '17:00' });
+  return { enabled: false, days: days, maxPerDay: 50, delayMinutes: 5 };
+}
+
+function normalizeAutopilot_(s) {
+  const def = defaultAutopilot_();
+  s = s || {};
+  const hhmm = function (v, fallback) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(v || ''));
+    if (!m || +m[1] > 23 || +m[2] > 59) return fallback;
+    return (m[1].length === 1 ? '0' : '') + m[1] + ':' + m[2];
+  };
+  const days = def.days.map(function (dd, i) {
+    const x = (Array.isArray(s.days) && s.days[i]) || dd;
+    let from = hhmm(x.from, dd.from), to = hhmm(x.to, dd.to);
+    if (to <= from) { from = dd.from; to = dd.to; }
+    return { on: !!x.on, from: from, to: to };
+  });
+  const int = function (v, lo, hi, fallback) {
+    const n = Math.floor(Number(v));
+    return isNaN(n) ? fallback : Math.max(lo, Math.min(hi, n));
+  };
+  return {
+    enabled: !!s.enabled,
+    days: days,
+    maxPerDay: int(s.maxPerDay, 1, AUTOPILOT_MAX_PER_DAY, def.maxPerDay),
+    delayMinutes: int(s.delayMinutes, 0, AUTOPILOT_MAX_DELAY_MIN, def.delayMinutes)
+  };
+}
+
+function getAutopilot_() {
+  let raw = null;
+  try { raw = PropertiesService.getUserProperties().getProperty(AUTOPILOT_KEY); } catch (e) {}
+  if (!raw) return defaultAutopilot_();
+  try { return normalizeAutopilot_(JSON.parse(raw)); } catch (e) { return defaultAutopilot_(); }
+}
+
+function setAutopilot_(s) {
+  const ap = normalizeAutopilot_(s);
+  PropertiesService.getUserProperties().setProperty(AUTOPILOT_KEY, JSON.stringify(ap));
+  return ap;
+}
+
+// Calendar date and weekday (0 = Sunday) of an instant, in tz.
+function wallDate_(ms, tz) {
+  const date = Utilities.formatDate(new Date(ms), tz, 'yyyy-MM-dd');
+  return { date: date, dow: new Date(date + 'T00:00:00Z').getUTCDay() };
+}
+
+function readAutopilotState_(today) {
+  let st = null;
+  try { st = JSON.parse(PropertiesService.getUserProperties().getProperty(AUTOPILOT_STATE_KEY) || 'null'); } catch (e) {}
+  st = st || {};
+  return { day: today, count: st.day === today ? (st.count || 0) : 0, lastAt: st.lastAt || 0 };
+}
+
+// Earliest instant >= nowMs at which Autopilot allows a send, or null when no
+// day is switched on. Looks at most a week ahead.
+function autopilotNextSlot_(nowMs, ap, tz, state) {
+  let earliest = nowMs;
+  if (ap.delayMinutes && state.lastAt) earliest = Math.max(earliest, state.lastAt + ap.delayMinutes * 60000);
+  for (let k = 0; k <= 8; k++) {
+    const wd = wallDate_(earliest + k * 86400000, tz);
+    const win = ap.days[wd.dow];
+    if (!win.on) continue;
+    if (wd.date === state.day && state.count >= ap.maxPerDay) continue;
+    const start = Utilities.parseDate(wd.date + ' ' + win.from, tz, 'yyyy-MM-dd HH:mm').getTime();
+    const end = Utilities.parseDate(wd.date + ' ' + win.to, tz, 'yyyy-MM-dd HH:mm').getTime();
+    const cand = Math.max(earliest, start);
+    if (cand < end) return cand;
+  }
+  return null;
+}
+
+// One per scheduler run. canSend() says whether a follow-up may go out right
+// now; record() counts one that did.
+function autopilotGate_() {
+  const ap = getAutopilot_();
+  if (!ap.enabled) return { enabled: false, canSend: function () { return true; }, record: function () {}, nextSlot: function () { return null; } };
+  const tz = getPreferredTz_();
+  const state = readAutopilotState_(wallDate_(Date.now(), tz).date);
+  return {
+    enabled: true,
+    nextSlot: function () { return autopilotNextSlot_(Date.now(), ap, tz, state); },
+    canSend: function () {
+      const next = autopilotNextSlot_(Date.now(), ap, tz, state);
+      return next !== null && next <= Date.now();
+    },
+    record: function () {
+      const today = wallDate_(Date.now(), tz).date;
+      if (state.day !== today) { state.day = today; state.count = 0; }
+      state.count++;
+      state.lastAt = Date.now();
+      // A dry run sends nothing, so it must not use up today's allowance.
+      if (!CONFIG.dryRun) PropertiesService.getUserProperties().setProperty(AUTOPILOT_STATE_KEY, JSON.stringify(state));
+    }
+  };
+}
+
+// For the Studio: settings plus where things stand today.
+function autopilotStatus_() {
+  const ap = getAutopilot_();
+  const tz = getPreferredTz_();
+  const state = readAutopilotState_(wallDate_(Date.now(), tz).date);
+  const next = ap.enabled ? autopilotNextSlot_(Date.now(), ap, tz, state) : null;
+  return {
+    settings: ap,
+    tz: tz,
+    interval: normalizeInterval_(CONFIG.triggerIntervalMinutes),
+    maxPerRun: CONFIG.maxPerRun,
+    sentToday: state.count,
+    sendingNow: !ap.enabled || (next !== null && next <= Date.now()),
+    nextSlotLabel: next === null ? '' : Utilities.formatDate(new Date(next), tz, 'EEE, MMM d, h:mm a')
+  };
 }
 
 

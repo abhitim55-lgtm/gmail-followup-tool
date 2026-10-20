@@ -109,7 +109,7 @@ function makeEnv() {
   });
   ctx.CardService = new Proxy({}, { get: (_, p) => /^new/.test(p) ? () => chain() : new Proxy({}, { get: () => 'ENUM' }) });
   vm.createContext(ctx);
-  vm.runInContext(fs.readFileSync(ROOT + 'Code.gs', 'utf8') + '\n' + fs.readFileSync(ROOT + 'Studio.gs', 'utf8') + '\n' + fs.readFileSync(ROOT + 'Sidebar.gs', 'utf8'), ctx);
+  vm.runInContext(fs.readFileSync(ROOT + 'Code.gs', 'utf8') + '\n' + fs.readFileSync(ROOT + 'Studio.gs', 'utf8') + '\n' + fs.readFileSync(ROOT + 'Sidebar.gs', 'utf8') + '\n' + fs.readFileSync(ROOT + 'Api.gs', 'utf8'), ctx);
   const actAs = (email) => {
     runningEmail = email;
     vm.runInContext('_cachedRunningEmail_ = null; _cachedSendAsList_ = null; _cachedMyEmails_ = null; _cachedFromHeader_ = null;', ctx);
@@ -399,6 +399,48 @@ test('home shows getting-started only for a brand-new user', () => {
   assert.ok(!E.texts.includes('Getting started'));
 });
 
+test('MCP API: send_campaign previews without sending, sends only with confirm', () => {
+  const E = makeEnv();
+  E.userProps.seq_S = JSON.stringify({ steps: [{ amount: 2, unit: 'days', message: 'Bump {firstName}' }, { amount: 3, unit: 'days', message: '' }] });
+  const p = { recipients: 'Jane Roe <jane@acme.com>, bad-one, sam@globex.com', subject: 'Hi {firstName}', body: 'Hello {firstName} {company}', sequence: 'S', tz: 'Asia/Kolkata' };
+  const pv = E.ctx.mcpSendCampaign(p);
+  assert.strictEqual(E.sent.length, 0);
+  assert.ok(pv.preview);
+  assert.strictEqual(JSON.stringify(pv.recipients), JSON.stringify(['Jane Roe <jane@acme.com>', 'sam@globex.com']));
+  assert.strictEqual(pv.firstEmail.subject, 'Hi Jane');
+  assert.strictEqual(pv.followUps.length, 2);
+  assert.strictEqual(pv.followUps[0].message, 'Bump Jane');
+  assert.ok(/^About /.test(pv.followUps[1].when));
+  assert.ok(pv.warnings.some(w => /Skipped, not a valid email: bad-one/.test(w)));
+  assert.ok(pv.warnings.some(w => /\{company\} won/.test(w)));
+  assert.throws(() => E.ctx.mcpSendCampaign({ recipients: 'a@b.co', subject: '', body: 'x' }), /subject/);
+  assert.throws(() => E.ctx.mcpSendCampaign({ recipients: 'a@b.co', subject: 's', body: 'x', sequence: 'Nope' }), /not found/);
+  assert.strictEqual(E.sent.length, 0);
+  const res = E.ctx.mcpSendCampaign(Object.assign({ confirm: true }, p));
+  assert.strictEqual(res.sent, 2); assert.strictEqual(E.sent.length, 2);
+  assert.strictEqual(JSON.parse(E.userProps.custom_t1).steps.length, 2);
+});
+
+test('MCP API: sequence on a thread and stop both need confirm', () => {
+  const E = makeEnv();
+  E.mkThread('th', 'Intro', [E.mkMessage({ from: ME, to: 'Pat Lee <pat@co.io>' })]);
+  E.userProps.seq_S = JSON.stringify({ steps: [{ amount: 2, unit: 'days', message: 'Hi {firstName}' }] });
+  const pv = E.ctx.mcpStartSequenceOnThread({ threadId: 'th', sequence: 'S' });
+  assert.ok(pv.preview && !E.userProps.custom_th);
+  assert.strictEqual(pv.followUps[0].message, 'Hi Pat');
+  assert.throws(() => E.ctx.mcpStopCampaign('th'), /Nothing is scheduled/);
+  const ok = E.ctx.mcpStartSequenceOnThread({ threadId: 'th', sequence: 'S', confirm: true });
+  assert.ok(ok.scheduled && E.userProps.custom_th);
+  assert.strictEqual(JSON.parse(E.userProps.custom_th).campaignName, 'S');
+  const stopPv = E.ctx.mcpStopCampaign('th');
+  assert.ok(stopPv.preview && stopPv.cancels.length === 1 && E.userProps.custom_th);
+  const stopped = E.ctx.mcpStopCampaign('th', true);
+  assert.ok(stopped.stopped && !E.userProps.custom_th && !E.threads.th.labels.has('FU/Custom'));
+  assert.strictEqual(E.sent.length, 0);
+  assert.strictEqual(E.ctx.mcpListSequences()[0].name, 'S');
+  assert.ok('running' in E.ctx.mcpStatus());
+});
+
 test('scheduler: old trigger with no interval record is rebuilt at 5 min, once', () => {
   const E = makeEnv();
   let triggers = [{ getHandlerFunction: () => 'processFollowUps', old: true }], created = [];
@@ -410,6 +452,167 @@ test('scheduler: old trigger with no interval record is rebuilt at 5 min, once',
   assert.deepStrictEqual(created, [5]); assert.strictEqual(triggers.length, 1); assert.ok(!triggers[0].old);
   E.ctx.processFollowUps(); E.ctx.ensureScheduler_();
   assert.deepStrictEqual(created, [5], 'no rebuild once recorded');
+});
+
+test('Studio campaign log: list shows status, report shows each person\'s stage, stop marks it', () => {
+  const E = makeEnv();
+  E.ctx.studioSendCampaign({ recipients: 'Jane <jane@acme.com>\nsam@globex.com', subject: 'Hi', body: 'First',
+    followUps: [{ amount: 1, unit: 'days' }, { amount: 2, unit: 'days' }], campaignName: 'Q4' });
+  let st = E.ctx.studioState();
+  assert.strictEqual(st.campaignList.length, 1);
+  const row = st.campaignList[0];
+  assert.strictEqual(row.name, 'Q4'); assert.strictEqual(row.status, 'active');
+  assert.strictEqual(row.recipients, 2); assert.strictEqual(row.active, 2); assert.strictEqual(row.steps, 2);
+  // Jane replies: the scheduler drops her follow-ups.
+  E.threads.t1.messages.push(E.mkMessage({ from: 'Jane <jane@acme.com>', to: ME }));
+  const d = JSON.parse(E.userProps.custom_t1); d.steps[0].sendAt = Date.now() - 1000; E.userProps.custom_t1 = JSON.stringify(d);
+  E.ctx.processFollowUps();
+  let rep = E.ctx.studioGetCampaign(row.id);
+  assert.strictEqual(rep.totals.recipients, 2); assert.strictEqual(rep.totals.replied, 1); assert.strictEqual(rep.totals.active, 1);
+  const jane = rep.people.find(p => p.email === 'jane@acme.com'), sam = rep.people.find(p => p.email === 'sam@globex.com');
+  assert.strictEqual(jane.status, 'replied'); assert.strictEqual(jane.stages.join(), 'sent,skipped,skipped');
+  assert.strictEqual(sam.status, 'active'); assert.strictEqual(sam.stages.join(), 'sent,next,pending');
+  E.ctx.studioStopCampaign(row.id);
+  rep = E.ctx.studioGetCampaign(row.id);
+  assert.strictEqual(rep.people.find(p => p.email === 'sam@globex.com').status, 'stopped');
+  assert.strictEqual(E.ctx.studioState().campaignList[0].status, 'ended');
+  assert.strictEqual(E.sent.length, 2, 'stopping and reporting never send');
+});
+
+test('Studio campaign list groups follow-ups started from Gmail; log keeps 30 campaigns', () => {
+  const E = makeEnv();
+  E.mkThread('th', 'Proposal', [E.mkMessage({ from: ME, to: 'Kim <kim@x.co>' })]);
+  E.ctx.studioScheduleOnThread({ threadId: 'th', followUps: [{ amount: 2, unit: 'days' }] });
+  const list = E.ctx.studioState().campaignList;
+  assert.strictEqual(list.length, 1); assert.ok(list[0].id.indexOf('g:') === 0); assert.strictEqual(list[0].status, 'active');
+  const rep = E.ctx.studioGetCampaign(list[0].id);
+  assert.strictEqual(rep.people.length, 1); assert.strictEqual(rep.people[0].status, 'active');
+  for (let i = 0; i < 33; i++) E.ctx.logCampaign_({ name: 'c' + i, subject: 's', steps: 0, recipients: [] });
+  assert.strictEqual(Object.keys(E.userProps).filter(k => k.indexOf('clog_') === 0).length, 30);
+});
+
+test('Studio preview runs the review checks and never sends; test goes to me only', () => {
+  const E = makeEnv();
+  const p = E.ctx.studioPreview({ recipients: 'sam@globex.com, nope', subject: 'Hi {firstName} {company}', body: 'x',
+    followUps: [{ amount: 3, unit: 'days', message: '' }], tz: 'Asia/Kolkata' });
+  assert.strictEqual(p.blockers.length, 0);
+  assert.ok(p.warnings.some(w => /nope/.test(w)), 'skipped address');
+  assert.ok(p.warnings.some(w => /\{company\}/.test(w)), 'unknown placeholder');
+  assert.ok(p.warnings.some(w => /default/.test(w)), 'blank follow-up uses default');
+  assert.strictEqual(p.schedule.length, 1); assert.strictEqual(p.from, ME);
+  const bad = E.ctx.studioPreview({ recipients: '', subject: '', body: '', followUps: [{ amount: 0 }] });
+  assert.strictEqual(bad.blockers.length, 4);
+  assert.strictEqual(E.ctx.studioPreview({ mode: 'thread', followUps: [] }).blockers.length, 1);
+  assert.ok(!Object.values(E.userProps).includes('Asia/Kolkata'), 'preview never saves the timezone');
+  assert.strictEqual(E.sent.length, 0);
+  E.ctx.studioSendTest({ step: 0, recipients: 'Jane Roe <jane@acme.com>', subject: 'Hello', body: 'B', followUps: [{ message: 'Bump {firstName}' }] });
+  assert.strictEqual(E.sent.length, 1);
+  assert.ok(E.sent[0].headers.To.includes(ME)); assert.strictEqual(E.sent[0].headers.Subject, '[Test] Re: Hello');
+  assert.ok(E.sent[0].text.startsWith('Bump Jane'));
+  assert.strictEqual(E.ctx.studioState().campaignList.length, 0, 'a test is not a campaign');
+});
+
+// ───── Autopilot ─────
+// Arms one due follow-up per recipient and returns the env. Times are in UTC so
+// the windows below line up with the real clock.
+function autopilotEnv(n, ap) {
+  const E = makeEnv();
+  E.userProps.preferredTz = 'UTC';
+  E.ctx.studioSendCampaign({ recipients: Array.from({ length: n }, (_, i) => `p${i}@x.co`).join('\n'), subject: 'Hi', body: 'First',
+    followUps: [{ amount: 1, unit: 'days', message: 'Bump' }] });
+  for (let i = 1; i <= n; i++) {
+    const d = JSON.parse(E.userProps['custom_t' + i]); d.steps[0].sendAt = Date.now() - 1000; E.userProps['custom_t' + i] = JSON.stringify(d);
+  }
+  if (ap) E.ctx.studioSaveAutopilot(ap);
+  E.sent.length = 0;
+  return E;
+}
+const today = new Date().getUTCDay();
+const week = (fn) => Array.from({ length: 7 }, (_, d) => fn(d));
+const allDay = { on: true, from: '00:00', to: '23:59' };
+const queued = (E, n) => Array.from({ length: n }, (_, i) => E.userProps['custom_t' + (i + 1)]).filter(Boolean).length;
+
+test('autopilot: off by default, follow-ups go out as soon as due', () => {
+  const E = autopilotEnv(2);
+  assert.strictEqual(E.ctx.studioBootstrap().autopilot.settings.enabled, false);
+  const def = E.ctx.studioBootstrap().autopilot.settings.days;
+  assert.strictEqual(def.map(d => d.on).join(), 'false,true,true,true,true,true,false');
+  assert.ok(def.every(d => d.from === '09:00' && d.to === '17:00'));
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 2);
+});
+
+test('autopilot: due follow-up outside the sending days is held, then sent inside the window', () => {
+  const E = autopilotEnv(2, { enabled: true, maxPerDay: 50, delayMinutes: 0, days: week(d => d === today ? { on: false } : allDay) });
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 0, 'nothing sent on a day that is off');
+  assert.strictEqual(queued(E, 2), 2, 'held, not dropped');
+  const st = E.ctx.autopilotStatus_();
+  assert.strictEqual(st.sendingNow, false); assert.ok(st.nextSlotLabel, 'shows the next slot');
+  E.ctx.studioSaveAutopilot({ enabled: true, maxPerDay: 50, delayMinutes: 0, days: week(() => allDay) });
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 2); assert.strictEqual(queued(E, 2), 0);
+});
+
+test('autopilot: hours outside the window hold follow-ups until it opens', () => {
+  const h = new Date().getUTCHours();
+  // A 1-hour window that starts two hours from now (or ended two hours ago).
+  const p = n => (n < 10 ? '0' : '') + n + ':00';
+  const win = h <= 20 ? { on: true, from: p(h + 2), to: p(h + 3) } : { on: true, from: p(h - 3), to: p(h - 2) };
+  const E = autopilotEnv(1, { enabled: true, delayMinutes: 0, days: week(() => win) });
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 0); assert.strictEqual(queued(E, 1), 1);
+});
+
+test('autopilot: daily cap defers the rest to the next day', () => {
+  const E = autopilotEnv(3, { enabled: true, maxPerDay: 2, delayMinutes: 0, days: week(() => allDay) });
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 2); assert.strictEqual(queued(E, 3), 1);
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 2, 'cap holds across runs on the same day');
+  const st = JSON.parse(E.userProps.autopilotState); st.day = '2000-01-01'; E.userProps.autopilotState = JSON.stringify(st);
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 3, 'a new day resets the count'); assert.strictEqual(queued(E, 3), 0);
+});
+
+test('autopilot: minimum delay spaces sends across runs, also within one thread', () => {
+  const E = autopilotEnv(2, { enabled: true, maxPerDay: 50, delayMinutes: 10, days: week(() => allDay) });
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 1);
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 1, 'too soon after the last send');
+  const st = JSON.parse(E.userProps.autopilotState); st.lastAt -= 11 * 60000; E.userProps.autopilotState = JSON.stringify(st);
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 2);
+  // Two steps of one thread due at once: still one per delay.
+  E.userProps.custom_t1 = JSON.stringify({ steps: [{ sendAt: Date.now() - 2000, message: 'a' }, { sendAt: Date.now() - 1000, message: 'b' }] });
+  E.threads.t1.labels.add('FU/Custom');
+  const st2 = JSON.parse(E.userProps.autopilotState); st2.lastAt -= 11 * 60000; E.userProps.autopilotState = JSON.stringify(st2);
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 3); assert.strictEqual(JSON.parse(E.userProps.custom_t1).steps.length, 1);
+});
+
+test('autopilot: dry run respects the cap but does not use up the day', () => {
+  const E = autopilotEnv(2, { enabled: true, maxPerDay: 1, delayMinutes: 0, days: week(() => allDay) });
+  vm.runInContext('CONFIG.dryRun = true', E.ctx);
+  E.ctx.processFollowUps();
+  vm.runInContext('CONFIG.dryRun = false', E.ctx);
+  assert.strictEqual(E.sent.length, 0); assert.ok(!E.userProps.autopilotState);
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 1);
+});
+
+test('autopilot: settings are cleaned up when saved', () => {
+  const E = makeEnv();
+  const st = E.ctx.studioSaveAutopilot({ enabled: 1, maxPerDay: '-4', delayMinutes: 'abc',
+    days: [{ on: true, from: '18:00', to: '09:00' }, { on: true, from: '7:30', to: '25:00' }] });
+  const s = st.settings;
+  assert.strictEqual(s.enabled, true); assert.strictEqual(s.maxPerDay, 1); assert.strictEqual(s.delayMinutes, 5);
+  assert.strictEqual(JSON.stringify(s.days[0]), JSON.stringify({ on: true, from: '09:00', to: '17:00' }), 'reversed window falls back');
+  assert.strictEqual(s.days[1].from, '07:30'); assert.strictEqual(s.days[1].to, '17:00');
+  assert.strictEqual(s.days[6].on, false);
+  assert.strictEqual(E.ctx.studioSaveAutopilot({ maxPerDay: 99999, delayMinutes: 999 }).settings.maxPerDay, 2000);
+  assert.strictEqual(E.ctx.getAutopilot_().delayMinutes, 120);
 });
 
 console.log(`\n${pass} passed`);

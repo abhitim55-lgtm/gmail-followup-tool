@@ -1,14 +1,24 @@
 {
   "manifest_version": 3,
-  "name": "Follow-up Studio for Gmail",
-  "version": "1.0.0",
-  "description": "Adds Follow-up Studio to Gmail's left menu, under Drafts, and opens it inside Gmail.",
-  "icons": { "16": "icon16.png", "48": "icon48.png", "128": "icon128.png" },
+  "name": "Follow-ups for Gmail",
+  "version": "2.0.0",
+  "description": "Adds Follow-ups to Gmail's left menu: campaigns with follow-ups that stop when people reply, inside Gmail.",
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
   "content_scripts": [
     {
-      "matches": ["https://mail.google.com/*"],
-      "js": ["content.js"],
-      "css": ["content.css"],
+      "matches": [
+        "https://mail.google.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_idle"
     }
   ]

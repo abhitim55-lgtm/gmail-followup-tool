@@ -24,6 +24,8 @@ Gmail add-ons can only live in this side panel; the left-menu item comes from th
 
 **Follow-up Studio** (Studio.gs/StudioPage.html) is the full-page version with the same features, linked from the sidebar's home screen. The `chrome-extension/` folder adds it to Gmail's left menu under Drafts and opens it inside Gmail. See [chrome-extension/README.md](chrome-extension/README.md).
 
+**From Claude:** the `mcp/` folder is a small local MCP server. Claude Desktop or Claude Code can use it to list sequences and campaigns, start a sequence on a sent email, send a campaign, or stop follow-ups. It runs as your own Gmail account, and it always shows a preview first. Nothing sends until you confirm. `Api.gs` holds the functions it calls. For setup, see [mcp/README.md](mcp/README.md).
+
 Safety checks: every New campaign goes through a **Check before sending** screen (who gets it, the first email as they'll see it, follow-up dates, and warnings: no follow-ups, missing names for {firstName}, unknown placeholders, invalid addresses, people you emailed in the last 14 days, sending switched off). Stopping follow-ups and deleting a sequence both ask first.
 
 Both tag the thread `FU/Custom`. A time-based trigger sends each due step as a proper reply on the same thread — correct `In-Reply-To`/`References` headers, your Gmail display name, your signature appended. The trigger installs itself the first time you open the sidebar or Studio and repairs itself if it disappears.

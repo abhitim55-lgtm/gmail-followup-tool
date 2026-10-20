@@ -1,32 +1,40 @@
-// Follow-up Studio for Gmail.
-// Adds a "Follow-up Studio" item under Drafts in Gmail's left menu. Clicking
-// it opens the Studio web app (the same Apps Script project as the sidebar
-// add-on) over Gmail's main area. Any other menu click, Esc, or × closes it.
+// Follow-ups for Gmail.
+// Adds a "Follow-ups" item under Drafts in Gmail's left menu. Clicking it
+// opens the Follow-up Studio (the same Apps Script project as the sidebar
+// add-on) inside Gmail's main pane, the way Mailmeteor's "Campaigns" does:
+// Gmail's hash becomes #followups, Gmail's own list is hidden, and the Studio
+// takes its place. Inbox, a label, search or Back puts Gmail's view back.
 
 const DEPLOYMENT_ID = 'AKfycbxqfbAVuFNv968-Zb2eqDl664UlEDnEaWXbdvYicfV44s4jx4ytm0OkkV4v6SmNINduAA';
 // Accounts on this Workspace domain open the Studio via /a/macros/<domain>/
 // so the right Google account is used when several are signed in.
 const OWNER_DOMAIN = 'procmart.com';
-const LABEL = 'Follow-up Studio';
+const LABEL = 'Follow-ups';
+const HASH = '#followups';
 const ICON_PATH = 'M2.01 21 23 12 2.01 3 2 10l15 2-15 2z'; // Material "send"
 
-let panel = null;
+let page = null;
 
 function accountEmail() {
   const m = document.title.match(/[\w.+-]+@[\w-]+(\.[\w-]+)+/);
   return m ? m[0].toLowerCase() : '';
 }
 
-function studioUrl() {
+function studioUrl(view) {
   const domain = accountEmail().split('@')[1] || '';
-  return domain === OWNER_DOMAIN
+  const base = domain === OWNER_DOMAIN
     ? 'https://script.google.com/a/macros/' + domain + '/s/' + DEPLOYMENT_ID + '/exec'
     : 'https://script.google.com/macros/s/' + DEPLOYMENT_ID + '/exec';
+  return view ? base + '?view=' + encodeURIComponent(view) : base;
 }
 
 // Gmail's main column (message list + reading pane).
 function mainArea() {
   return document.querySelector('.nH.bkK');
+}
+
+function isOurs(hash) {
+  return hash === HASH || hash.indexOf(HASH + '/') === 0;
 }
 
 // Tiny DOM builder. Gmail enforces Trusted Types, so no innerHTML anywhere.
@@ -50,7 +58,7 @@ function sendIcon() {
 
 // Same structure and classes as Gmail's own menu rows, so it matches the theme.
 function buildNavRow() {
-  const link = el('a', { class: 'J-Ke n0', href: '#', tabindex: '-1' }, [LABEL]);
+  const link = el('a', { class: 'J-Ke n0', href: HASH, tabindex: '-1' }, [LABEL]);
   const to = el('div', { class: 'TO', role: 'link', tabindex: '0', title: LABEL }, [
     el('div', { class: 'TN aHS-bnq' }, [
       el('div', { class: 'qj' }, [sendIcon()]),
@@ -58,7 +66,11 @@ function buildNavRow() {
     ])
   ]);
   const row = el('div', { id: 'fu-nav-row', class: 'aim' }, [to]);
-  const open = (ev) => { ev.preventDefault(); ev.stopPropagation(); openPanel(); };
+  const open = (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (isOurs(location.hash)) mount(); else location.hash = HASH;
+  };
   row.addEventListener('click', open, true);
   row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') open(ev); });
   return row;
@@ -78,76 +90,67 @@ function ensureNavRow() {
   if (link && svg) svg.style.fill = getComputedStyle(link).color;
 }
 
-function buildPanel() {
-  const button = (cls, title, text, onClick) => {
-    const b = el('button', { class: cls, title: title }, [text]);
-    b.addEventListener('click', onClick);
-    return b;
-  };
-  const p = el('div', { id: 'fu-panel' }, [
-    el('div', { class: 'fu-bar' }, [
-      el('span', { class: 'fu-title' }, [LABEL]),
-      button('fu-reload', 'Reload', 'Reload', () => { p.querySelector('iframe').src = studioUrl(); }),
-      button('fu-newtab', 'Open in its own tab', 'Open in new tab', () => window.open(studioUrl(), '_blank', 'noopener')),
-      button('fu-close', 'Close (Esc)', '×', closePanel)
-    ])
-  ]);
-  document.body.appendChild(p);
+function buildPage() {
+  const p = el('div', { id: 'fu-page' });
+  // Load once and keep it: reopening is instant and keeps a half-written draft.
+  const f = document.createElement('iframe');
+  const sub = location.hash.slice(HASH.length + 1);
+  f.src = studioUrl(sub);
+  f.allow = 'clipboard-write';
+  f.title = LABEL;
+  p.appendChild(f);
   return p;
 }
 
-function placePanel() {
-  if (!panel || !panel.classList.contains('fu-open')) return;
+// Inside Gmail's main column, like Mailmeteor: Gmail's own panes are hidden
+// by a class on the column, never removed, so leaving restores them as-is.
+function mount() {
   const main = mainArea();
-  const r = main ? main.getBoundingClientRect()
-    : { left: 260, top: 64, width: window.innerWidth - 320, height: window.innerHeight - 80 };
-  panel.style.left = r.left + 'px';
-  panel.style.top = r.top + 'px';
-  panel.style.width = Math.max(320, r.width - 8) + 'px';
-  panel.style.height = Math.max(300, Math.min(r.height, window.innerHeight - r.top) - 16) + 'px';
-}
-
-function openPanel() {
-  if (!panel) panel = buildPanel();
-  // Load once and keep it: reopening is instant and keeps a half-written draft.
-  if (!panel.querySelector('iframe')) {
-    const f = document.createElement('iframe');
-    f.src = studioUrl();
-    f.allow = 'clipboard-write';
-    panel.appendChild(f);
-  }
-  panel.classList.add('fu-open');
+  if (!main) return;
+  if (!page) page = buildPage();
+  if (page.parentNode !== main) main.appendChild(page);
+  main.classList.add('fu-host');
   setActive(true);
-  placePanel();
+  fit();
 }
 
-function closePanel() {
-  if (!panel) return;
-  panel.classList.remove('fu-open');
+function unmount() {
+  const main = document.querySelector('.fu-host');
+  if (main) main.classList.remove('fu-host');
   setActive(false);
+}
+
+// Gmail sizes its panes with inline heights; match the column's height.
+function fit() {
+  const main = document.querySelector('.fu-host');
+  if (!main || !page) return;
+  const top = main.getBoundingClientRect().top;
+  page.style.height = Math.max(320, window.innerHeight - top - 16) + 'px';
 }
 
 function setActive(on) {
   const to = document.querySelector('#fu-nav-row .TO');
   if (to) to.classList.toggle('fu-active', on);
+  document.documentElement.classList.toggle('fu-on', on);
 }
 
-// Back to Gmail on any click outside the Studio (Inbox, a label, Compose,
-// search…) — clicks inside the Studio stay in its iframe and never get here.
-// hashchange covers keyboard shortcuts like "g i".
-document.addEventListener('click', (ev) => {
-  if (!panel || !panel.classList.contains('fu-open')) return;
-  if (ev.target.closest('#fu-panel, #fu-nav-row')) return;
-  closePanel();
-}, true);
-window.addEventListener('hashchange', closePanel);
-document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closePanel(); });
-window.addEventListener('resize', placePanel);
+function sync() {
+  if (isOurs(location.hash)) mount(); else unmount();
+}
+
+window.addEventListener('hashchange', sync);
+window.addEventListener('resize', fit);
 
 let pending = false;
 new MutationObserver(() => {
   if (pending) return;
   pending = true;
-  requestAnimationFrame(() => { pending = false; ensureNavRow(); placePanel(); });
+  requestAnimationFrame(() => {
+    pending = false;
+    ensureNavRow();
+    // Gmail can rebuild its main column; re-attach if we're showing.
+    if (isOurs(location.hash) && (!page || !page.isConnected || !document.querySelector('.fu-host'))) mount();
+  });
 }).observe(document.body, { childList: true, subtree: true });
 ensureNavRow();
+sync();
