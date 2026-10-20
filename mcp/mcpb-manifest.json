@@ -1,0 +1,34 @@
+{
+  "manifest_version": "0.2",
+  "name": "gmail-followup",
+  "display_name": "Gmail Follow-ups",
+  "version": "1.0.0",
+  "description": "Use the Gmail Follow-Up Tool from Claude: see your sequences and campaigns, start follow-ups on sent emails, send campaigns and stop follow-ups. Everything previews first and waits for your yes.",
+  "author": {
+    "name": "Abhishek Sehgal"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "server.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server.js"],
+      "env": {}
+    }
+  },
+  "tools": [
+    { "name": "status", "description": "Which account is sending, whether the scheduler runs, last run" },
+    { "name": "list_sequences", "description": "Saved follow-up sequences" },
+    { "name": "list_campaigns", "description": "Threads with follow-ups scheduled" },
+    { "name": "list_sent_threads", "description": "Recent sent emails to follow up on" },
+    { "name": "start_sequence_on_thread", "description": "Schedule a sequence on a sent email (preview, then confirm)" },
+    { "name": "send_campaign", "description": "Send a first email and follow-ups (preview, then confirm)" },
+    { "name": "stop_campaign", "description": "Cancel follow-ups on a thread (preview, then confirm)" },
+    { "name": "sign_in", "description": "Connect your Google account" },
+    { "name": "sign_out", "description": "Disconnect your Google account" }
+  ],
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": { "node": ">=18.0.0" }
+  }
+}

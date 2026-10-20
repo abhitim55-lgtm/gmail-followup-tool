@@ -4,3 +4,4 @@ node_modules/
 .omc/
 *.zip
 client_secret*.json
+mcp/dist/
