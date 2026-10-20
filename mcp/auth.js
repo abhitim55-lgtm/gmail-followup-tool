@@ -34,12 +34,39 @@ export function scopes() {
 
 export class NeedsSetup extends Error {}
 
+// The team's client file usually arrives as a download. If it isn't in place
+// yet, take the newest client_secret*.json from Downloads and copy it in, so
+// setup needs no terminal (teammates on Windows use Claude Desktop only).
+export function adoptDownloadedClient() {
+  if (process.env.GFU_OAUTH_CLIENT || fs.existsSync(CLIENT_FILE)) return;
+  const dir = path.join(os.homedir(), 'Downloads');
+  let files = [];
+  try {
+    files = fs.readdirSync(dir)
+      .filter((f) => /^client_secret.*\.json$/i.test(f))
+      .map((f) => ({ f: path.join(dir, f), t: fs.statSync(path.join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t);
+  } catch (e) { return; }
+  for (const { f } of files) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(f, 'utf8'));
+      const c = raw.installed || raw.web || raw;
+      if (!/\.apps\.googleusercontent\.com$/.test(c.client_id || '')) continue;
+      fs.mkdirSync(HOME, { recursive: true, mode: 0o700 });
+      fs.copyFileSync(f, CLIENT_FILE);
+      try { fs.chmodSync(CLIENT_FILE, 0o600); } catch (e) {}
+      return;
+    } catch (e) {}
+  }
+}
+
 function loadClient() {
+  adoptDownloadedClient();
   let raw;
   try { raw = JSON.parse(fs.readFileSync(CLIENT_FILE, 'utf8')); }
   catch (e) {
-    throw new NeedsSetup('No OAuth client found at ' + CLIENT_FILE + '. Download the "Desktop app" OAuth client ' +
-      'JSON from Google Cloud (see mcp/README.md, step 3) and save it there.');
+    throw new NeedsSetup('No OAuth client found at ' + CLIENT_FILE + '. Download client_secret.json from the ' +
+      'team\'s "Follow-ups Tool – Team Install" Drive folder into your Downloads folder, then try again.');
   }
   const c = raw.installed || raw.web || raw;
   if (!c.client_id) throw new NeedsSetup(CLIENT_FILE + ' is not an OAuth client JSON file.');
@@ -105,9 +132,12 @@ export async function accessToken() {
 }
 
 function openBrowser(url) {
-  const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
-  const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
-  try { spawn(cmd, args, { stdio: 'ignore', detached: true }).unref(); } catch (e) {}
+  // Windows: rundll32 hands the URL straight to the default browser. `cmd /c
+  // start` would treat the &s in Google's sign-in URL as command separators.
+  const [cmd, args] = process.platform === 'darwin' ? ['open', [url]]
+    : process.platform === 'win32' ? ['rundll32', ['url.dll,FileProtocolHandler', url]]
+    : ['xdg-open', [url]];
+  try { spawn(cmd, args, { stdio: 'ignore', detached: true, windowsHide: true }).unref(); } catch (e) {}
 }
 
 // Opens Google's consent page in the browser and waits for the redirect back
