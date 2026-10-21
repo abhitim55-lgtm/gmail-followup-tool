@@ -443,13 +443,19 @@ function processCustomThread_(thread, label, data, myEmails, cutoff, gate) {
     ccAddr = mergeRecipients_(ccAddr, step.cc || '');
     const bccAddr = (step.bcc || '').trim();
     const replyAnchor = messages[messages.length - 1] || null;
+    let attachments = [];
+    if (step.attachDraftId) {
+      try { attachments = loadAttachmentHolder_(step.attachDraftId); }
+      catch (err) { throw new Error('Attachment for this follow-up is missing (its holder draft was deleted): ' + err); }
+    }
     sendThreadReply_(thread, {
       to: toAddr,
       cc: ccAddr,
       bcc: bccAddr,
       body: text,
       html: html,
-      replyTo: replyAnchor
+      replyTo: replyAnchor,
+      attachments: attachments
     });
     Logger.log('✓ Custom follow-up sent to ' + toAddr +
       (ccAddr ? ' (cc ' + ccAddr + ')' : '') +
@@ -465,6 +471,7 @@ function processCustomThread_(thread, label, data, myEmails, cutoff, gate) {
   } else {
     props.setProperty(key, JSON.stringify(data));
   }
+  if (sentAny) cleanupAttachmentHolders_();
   return sentAny;
 }
 
@@ -496,7 +503,8 @@ function sendThreadReply_(thread, options) {
 
   const encoded = buildRawMime_({
     to: to, cc: cc, bcc: bcc, subject: subject, body: body, html: html,
-    inReplyTo: threadHeaders.inReplyTo, references: threadHeaders.references
+    inReplyTo: threadHeaders.inReplyTo, references: threadHeaders.references,
+    attachments: options.attachments || []
   });
   return Gmail.Users.Messages.send({
     raw: encoded,
@@ -512,9 +520,66 @@ function sendNewMessage_(options) {
   const encoded = buildRawMime_({
     to: options.to, cc: options.cc || '', bcc: options.bcc || '',
     subject: options.subject || '', body: options.body || '',
-    html: options.html || textToHtml_(options.body || '')
+    html: options.html || textToHtml_(options.body || ''),
+    attachments: options.attachments || []
   });
   return Gmail.Users.Messages.send({ raw: encoded }, 'me');
+}
+
+// ───────── Follow-up attachments ───────────────────────────────────
+//
+// A queued follow-up's files can't live in UserProperties (9 KB per value),
+// so they are kept as a Gmail draft addressed to the user ("holder"). Its id
+// goes on the step; the scheduler attaches the draft's files when the step
+// sends. Needs no extra permission: gmail.modify covers drafts. Holders are
+// deleted once no queued step and no saved sequence refers to them.
+
+const HOLDER_SUBJECT = '[Follow-ups] attachment holder — do not delete';
+
+// files: [{ name, mimeType, data (base64) }] → draft id
+function createAttachmentHolder_(files) {
+  const me = getRunningEmail_();
+  const raw = buildRawMime_({
+    to: me, subject: HOLDER_SUBJECT,
+    body: 'Kept by the Follow-ups tool: these files go out with a scheduled follow-up. ' +
+      'It deletes this draft by itself once nothing needs it.',
+    html: '', attachments: files
+  });
+  const d = Gmail.Users.Drafts.create({ message: { raw: raw } }, 'me');
+  return d.id;
+}
+
+function loadAttachmentHolder_(draftId) {
+  const msg = GmailApp.getDraft(draftId).getMessage();
+  return msg.getAttachments().map(function (b) {
+    return { name: b.getName(), mimeType: b.getContentType(), data: Utilities.base64Encode(b.getBytes()) };
+  });
+}
+
+function referencedHolderIds_() {
+  const props = PropertiesService.getUserProperties();
+  const used = {};
+  props.getKeys().forEach(function (k) {
+    if (k.indexOf('custom_') !== 0 && k.indexOf(SEQUENCE_PREFIX) !== 0) return;
+    try {
+      (JSON.parse(props.getProperty(k)).steps || []).forEach(function (s) {
+        if (s && s.attachDraftId) used[s.attachDraftId] = true;
+      });
+    } catch (e) {}
+  });
+  return used;
+}
+
+function cleanupAttachmentHolders_() {
+  try {
+    const used = referencedHolderIds_();
+    GmailApp.getDrafts().forEach(function (d) {
+      const m = d.getMessage();
+      if (m.getSubject() === HOLDER_SUBJECT && !used[d.getId()]) d.deleteDraft();
+    });
+  } catch (e) {
+    Logger.log('cleanupAttachmentHolders_: ' + e);
+  }
 }
 
 // Plain text → minimal HTML: escaped, newlines as <br>.
@@ -538,6 +603,15 @@ function buildRawMime_(o) {
     raw += 'References: ' + o.references + '\r\n';
   }
   raw += 'MIME-Version: 1.0\r\n';
+  // Attachments wrap the text/html alternative in a multipart/mixed envelope.
+  // o.attachments: [{ name, mimeType, data (standard base64) }]
+  const files = Array.isArray(o.attachments) ? o.attachments : [];
+  const mixed = '----=_omc_mx' + Math.random().toString(36).slice(2);
+  if (files.length) {
+    raw += 'Content-Type: multipart/mixed; boundary="' + mixed + '"\r\n';
+    raw += '\r\n';
+    raw += '--' + mixed + '\r\n';
+  }
   raw += 'Content-Type: multipart/alternative; boundary="' + boundary + '"\r\n';
   raw += '\r\n';
   raw += '--' + boundary + '\r\n';
@@ -551,6 +625,22 @@ function buildRawMime_(o) {
   raw += '\r\n';
   raw += encodeBase64Body_(o.html) + '\r\n';
   raw += '--' + boundary + '--';
+  if (files.length) {
+    raw += '\r\n';
+    files.forEach(function (f) {
+      const name = String(f.name || 'attachment').replace(/[\r\n"]/g, '');
+      const encName = /^[\x20-\x7E]*$/.test(name)
+        ? '"' + name + '"'
+        : '"=?UTF-8?B?' + Utilities.base64Encode(name, Utilities.Charset.UTF_8) + '?="';
+      raw += '--' + mixed + '\r\n';
+      raw += 'Content-Type: ' + (f.mimeType || 'application/octet-stream') + '; name=' + encName + '\r\n';
+      raw += 'Content-Disposition: attachment; filename=' + encName + '\r\n';
+      raw += 'Content-Transfer-Encoding: base64\r\n';
+      raw += '\r\n';
+      raw += String(f.data || '').replace(/\s+/g, '').replace(/(.{76})/g, '$1\r\n') + '\r\n';
+    });
+    raw += '--' + mixed + '--';
+  }
   return Utilities.base64EncodeWebSafe(raw);
 }
 
@@ -1917,7 +2007,9 @@ function normalizeSeqStep_(s) {
     condition: condition,
     message: String(s.message || ''),
     cc: String(s.cc || ''),
-    bcc: String(s.bcc || '')
+    bcc: String(s.bcc || ''),
+    attachDraftId: String(s.attachDraftId || ''),
+    attachNames: Array.isArray(s.attachNames) ? s.attachNames.map(String) : []
   };
 }
 
@@ -2115,6 +2207,10 @@ function armThreadWithSteps_(threadId, steps, opts) {
     if (recipientsField) obj.to = recipientsField;
     if (stepCc) obj.cc = stepCc;
     if (stepBcc) obj.bcc = stepBcc;
+    if (s.attachDraftId) {
+      obj.attachDraftId = s.attachDraftId;
+      obj.attachNames = s.attachNames || [];
+    }
     return obj;
   });
 

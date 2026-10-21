@@ -212,7 +212,8 @@ function studioSendCampaign(p) {
         results.push({ email: r.email, ok: true, dryRun: true });
         return;
       }
-      const sent = sendNewMessage_({ to: to, cc: cc, bcc: bcc, subject: renderedSubject, body: text });
+      const sent = sendNewMessage_({ to: to, cc: cc, bcc: bcc, subject: renderedSubject, body: text,
+        attachments: p.attachments || [] });
       // From here the email is out: never report this recipient as failed, or
       // the page offers to resend and they get it twice.
       let firstFollowUp = 0, armError = '';

@@ -24,6 +24,50 @@ function mcpListSequences() {
   return studioSequences_();
 }
 
+// Create or update a saved sequence. Sends nothing.
+// s: { name, originalName?, subject?, firstMessage?, steps: [draft-shaped step] }
+function mcpSaveSequence(s) {
+  s = s || {};
+  const name = String(s.name || '').trim();
+  const original = String(s.originalName || '').trim();
+  if (name && name !== original && getSequence_(name) && !s.overwrite) {
+    throw new Error('A sequence called "' + name + '" already exists. Use a different name, or pass overwrite: true to replace it.');
+  }
+  const list = studioSaveSequence({
+    name: name, originalName: original || (s.overwrite ? name : ''),
+    subject: s.subject || '', firstMessage: s.firstMessage || '', steps: mcpStashStepFiles_(s.steps)
+  });
+  cleanupAttachmentHolders_(); // files of a replaced version
+  return { saved: name, sequence: list.filter(function (x) { return x.name === name; })[0] || null };
+}
+
+// Without confirm: what would be deleted. With confirm: delete it.
+// Running campaigns keep their already-scheduled follow-ups either way.
+function mcpDeleteSequence(name, confirm) {
+  const n = String(name || '');
+  const seq = studioSequences_().filter(function (x) { return x.name === n; })[0];
+  if (!seq) throw new Error('No sequence called "' + n + '". Use list_sequences to see the names.');
+  if (!confirm) return { preview: true, sequence: seq, note: 'Campaigns already running keep their follow-ups.' };
+  studioDeleteSequence(n);
+  cleanupAttachmentHolders_();
+  return { deleted: n };
+}
+
+// Steps from the MCP may carry files ({ attachments: [{name,mimeType,data}] }).
+// Turn each step's files into a holder draft, leaving only its id on the step.
+function mcpStashStepFiles_(steps) {
+  return (steps || []).map(function (s) {
+    const files = Array.isArray(s.attachments) ? s.attachments : [];
+    const out = {};
+    Object.keys(s).forEach(function (k) { if (k !== 'attachments') out[k] = s[k]; });
+    if (files.length) {
+      out.attachDraftId = createAttachmentHolder_(files);
+      out.attachNames = files.map(function (f) { return f.name; });
+    }
+    return out;
+  });
+}
+
 function mcpListCampaigns() {
   return studioCampaigns_();
 }
@@ -40,8 +84,9 @@ function mcpSendCampaign(p) {
   const steps = mcpCampaignSteps_(p);
   if (!p.confirm) return mcpCampaignPreview_(p, steps);
   const res = studioSendCampaign({
-    recipients: p.recipients, subject: p.subject, body: p.body, followUps: steps,
-    campaignName: p.campaignName, cc: p.cc, bcc: p.bcc, tz: p.tz
+    recipients: p.recipients, subject: p.subject, body: p.body, followUps: mcpStashStepFiles_(steps),
+    campaignName: p.campaignName, cc: p.cc, bcc: p.bcc, tz: p.tz,
+    attachments: Array.isArray(p.attachments) ? p.attachments : []
   });
   delete res.campaigns;
   return res;
@@ -51,16 +96,24 @@ function mcpSendCampaign(p) {
 function mcpStartSequenceOnThread(p) {
   p = p || {};
   const name = String(p.sequence || '');
-  const seq = getSequence_(name);
-  if (!seq || !Array.isArray(seq.steps) || seq.steps.length === 0) {
-    throw new Error('Sequence "' + name + '" not found or has no follow-ups. Use list_sequences to see the names.');
+  let seq = null, steps;
+  if (name) {
+    seq = getSequence_(name);
+    if (!seq || !Array.isArray(seq.steps) || seq.steps.length === 0) {
+      throw new Error('Sequence "' + name + '" not found or has no follow-ups. Use list_sequences to see the names.');
+    }
+    steps = seq.steps.slice(0, MAX_CAMPAIGN_STEPS).map(normalizeSeqStep_);
+  } else {
+    steps = Array.isArray(p.followUps) ? p.followUps : [];
+    if (!steps.length) throw new Error('Give either a saved sequence name or the follow-ups to send.');
   }
-  const steps = seq.steps.slice(0, MAX_CAMPAIGN_STEPS).map(normalizeSeqStep_);
+  seq = seq || {};
   const opts = {
-    threadId: p.threadId, followUps: steps, tz: p.tz, campaignName: name,
+    threadId: p.threadId, followUps: steps, tz: p.tz, campaignName: name || String(p.campaignName || ''),
     recipients: seq.recipients || '', cc: seq.cc || '', bcc: seq.bcc || ''
   };
   if (p.confirm) {
+    opts.followUps = mcpStashStepFiles_(opts.followUps);
     const res = studioScheduleOnThread(opts);
     return { scheduled: true, thread: res.thread, schedulerOk: res.schedulerOk };
   }
@@ -82,7 +135,7 @@ function mcpStartSequenceOnThread(p) {
   return {
     preview: true,
     thread: { threadId: thread.threadId, subject: thread.subject, recipient: thread.recipient, permalink: thread.permalink },
-    followUps: mcpScheduleLabels_(steps, tz, vars),
+    followUps: mcpScheduleLabels_(studioSteps_(steps, tz), tz, vars),
     warnings: warnings
   };
 }
@@ -149,6 +202,7 @@ function mcpCampaignPreview_(p, rawSteps) {
       body: applySignatureToBody_(renderPlaceholders_(d.body, vars))
     },
     followUps: mcpScheduleLabels_(steps, tz, vars),
+    attachments: (p.attachmentNames || []).map(String),
     timezone: tz,
     warnings: ncWarnings_(d, recips, steps)
   };
@@ -167,7 +221,9 @@ function mcpScheduleLabels_(steps, tz, vars) {
     return {
       when: 'About ' + formatLocal_(prev, tz),
       condition: conditionLabel_(s.condition),
-      message: renderPlaceholders_(s.message || CONFIG.defaultTemplate, vars)
+      message: renderPlaceholders_(s.message || CONFIG.defaultTemplate, vars),
+      attachments: (s.attachNames && s.attachNames.length) ? s.attachNames
+        : (s.attachments || []).map(function (f) { return f.name; })
     };
   });
 }

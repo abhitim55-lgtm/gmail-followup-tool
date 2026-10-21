@@ -41,8 +41,8 @@ const codeOf = (r) => JSON.parse(bodyOf(r).slice(bodyOf(r).indexOf('\n\n') + 2))
 test('lists the expected tools', async () => {
   const c = await connect(fakeBackend().run);
   const names = (await c.listTools()).tools.map((t) => t.name).sort();
-  assert.deepStrictEqual(names, ['list_campaigns', 'list_sent_threads', 'list_sequences', 'send_campaign',
-    'sign_in', 'sign_out', 'start_sequence_on_thread', 'status', 'stop_campaign']);
+  assert.deepStrictEqual(names, ['delete_sequence', 'list_campaigns', 'list_sent_threads', 'list_sequences', 'save_sequence',
+    'send_campaign', 'sign_in', 'sign_out', 'start_sequence_on_thread', 'status', 'stop_campaign']);
 });
 
 test('send_campaign: preview first, confirm only with the matching code and same args', async () => {
@@ -113,4 +113,51 @@ test('scripts.run errors become plain explanations', async () => {
   assert.match(sent.url, /\/v1\/scripts\/AKfyTEST:run$/);
   assert.deepStrictEqual(JSON.parse(sent.init.body), { function: 'mcpStatus', parameters: [1], devMode: false });
   assert.strictEqual(sent.init.headers.Authorization, 'Bearer a');
+});
+
+test('save_sequence converts follow-ups and sends nothing; exact dates refused', async () => {
+  const calls = [];
+  const c = await connect(async (fn, params = []) => { calls.push([fn, params]); return { saved: params[0] && params[0].name }; });
+  const r = await c.callTool({ name: 'save_sequence', arguments: { name: 'GPC 3-touch',
+    follow_ups: [{ wait: 3, message: 'Bump {firstName}' }, { wait: 4, unit: 'days', at_time: '09:30', condition: 'always', message: 'Last' }] } });
+  assert.ok(!r.isError, bodyOf(r));
+  const [fn, [p]] = calls[0];
+  assert.strictEqual(fn, 'mcpSaveSequence');
+  assert.strictEqual(p.name, 'GPC 3-touch');
+  assert.deepStrictEqual(p.steps.map((s) => [s.amount, s.unit, s.atTime, s.condition]), [[3, 'days', '', 'no_reply'], [4, 'days', '09:30', 'always']]);
+  const bad = await c.callTool({ name: 'save_sequence', arguments: { name: 'X', follow_ups: [{ send_at: '2026-11-01 09:00', message: 'm' }] } });
+  assert.ok(bad.isError && /wait/.test(bodyOf(bad)));
+  assert.strictEqual(calls.length, 1, 'refused call never reached Apps Script');
+});
+
+test('delete_sequence previews first and needs the code', async () => {
+  const calls = [];
+  const c = await connect(async (fn, params = []) => { calls.push([fn, params]); return params[1] ? { deleted: params[0] } : { preview: true }; });
+  const blind = await c.callTool({ name: 'delete_sequence', arguments: { name: 'Old', confirm: true, confirmation_code: 'zzz' } });
+  assert.ok(blind.isError);
+  const pv = await c.callTool({ name: 'delete_sequence', arguments: { name: 'Old' } });
+  const ok = await c.callTool({ name: 'delete_sequence', arguments: { name: 'Old', confirm: true, confirmation_code: codeOf(pv) } });
+  assert.ok(!ok.isError, bodyOf(ok));
+  assert.deepStrictEqual(calls.map(([f, p]) => [f, p[1]]), [['mcpDeleteSequence', false], ['mcpDeleteSequence', true]]);
+});
+
+test('attachments: preview sends names only, confirm sends the files; missing file is a clear error', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'att-'));
+  const a = path.join(dir, 'quote.pdf'); fs.writeFileSync(a, '%PDF quote');
+  const b = path.join(dir, 'specs.pdf'); fs.writeFileSync(b, '%PDF specs');
+  const calls = [];
+  const c = await connect(async (fn, params = []) => { calls.push(params[0]); return params[0].confirm ? { sent: 1, failed: [], notArmed: [], schedulerOk: true } : { preview: true }; });
+  const args = { recipients: 'x@y.co', subject: 's', body: 'b', attachments: [a], follow_ups: [{ wait: 2, message: 'm', attachments: [b] }] };
+  const pv = await c.callTool({ name: 'send_campaign', arguments: args });
+  assert.ok(!pv.isError, bodyOf(pv));
+  assert.ok(!calls[0].attachments && calls[0].attachmentNames[0].startsWith('quote.pdf'));
+  assert.deepStrictEqual(calls[0].followUps[0].attachNames, ['specs.pdf']);
+  assert.ok(!calls[0].followUps[0].attachments, 'no file data in preview');
+  const ok = await c.callTool({ name: 'send_campaign', arguments: { ...args, confirm: true, confirmation_code: codeOf(pv) } });
+  assert.ok(!ok.isError, bodyOf(ok));
+  assert.strictEqual(Buffer.from(calls[1].attachments[0].data, 'base64').toString(), '%PDF quote');
+  assert.strictEqual(calls[1].attachments[0].mimeType, 'application/pdf');
+  assert.strictEqual(Buffer.from(calls[1].followUps[0].attachments[0].data, 'base64').toString(), '%PDF specs');
+  const missing = await c.callTool({ name: 'send_campaign', arguments: { ...args, attachments: [path.join(dir, 'nope.pdf')] } });
+  assert.ok(missing.isError && /not found/.test(bodyOf(missing)));
 });

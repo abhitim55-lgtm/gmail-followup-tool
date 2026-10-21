@@ -14,8 +14,9 @@ function makeEnv() {
     getKeys: () => Object.keys(store)
   });
   const threads = {}, labels = {};
-  let msgSeq = 0, threadSeq = 0;
-  const sent = [];
+  let msgSeq = 0, threadSeq = 0, draftSeq = 0;
+  const drafts = {};
+  const sent = [], sentMime = [];
   let runningEmail = ME;
   function mkMessage(o) {
     const id = 'm' + (++msgSeq);
@@ -54,7 +55,7 @@ function makeEnv() {
     },
     PropertiesService: { getUserProperties: () => propSvc(userProps), getScriptProperties: () => propSvc(scriptProps) },
     Utilities: {
-      base64Encode: (s) => Buffer.from(s, 'utf8').toString('base64'),
+      base64Encode: (s) => Buffer.from(Array.isArray(s) ? Buffer.from(s) : Buffer.from(s, 'utf8')).toString('base64'),
       base64EncodeWebSafe: (s) => Buffer.from(s, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
       Charset: { UTF_8: 'utf8' },
       formatDate: (d, tz, fmt) => {
@@ -78,6 +79,11 @@ function makeEnv() {
       newTrigger: () => { throw new Error('no'); }
     },
     GmailApp: {
+      getDraft: id => { const d = drafts[id]; if (!d) throw new Error('no draft ' + id);
+        return { getId: () => id, getMessage: () => ({ getSubject: () => d.subject, getAttachments: () => d.files.map(f => ({
+          getName: () => f.name, getContentType: () => f.type, getBytes: () => [...Buffer.from(f.data, 'base64')] })) }),
+          deleteDraft: () => { delete drafts[id]; } }; },
+      getDrafts: () => Object.keys(drafts).map(id => ctx.GmailApp.getDraft(id)),
       getThreadById: id => threads[id] || null,
       getUserLabelByName: n => labels[n] || null,
       createLabel: n => mkLabel(n),
@@ -87,9 +93,15 @@ function makeEnv() {
     Gmail: {
       Users: {
         Settings: { SendAs: { list: () => ({ sendAs: [{ sendAsEmail: runningEmail, displayName: 'Test User', isPrimary: true, isDefault: true }] }) } },
+        Drafts: { create: (res) => { const id = 'd' + (++draftSeq); const raw = Buffer.from(res.message.raw.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+          const subject = ((raw.match(/^Subject: (.*)$/m) || [])[1] || '').trim()
+            .replace(/=\?UTF-8\?B\?([^?]+)\?=\s*/gi, (_, b) => Buffer.from(b, 'base64').toString('utf8'));
+          const files = [...raw.matchAll(/Content-Type: ([^;\r\n]+); name="([^"]+)"[\s\S]*?\r\n\r\n([A-Za-z0-9+/=\r\n]+?)\r\n--/g)].map(m => ({ type: m[1], name: m[2], data: m[3].replace(/\s+/g, '') }));
+          drafts[id] = { subject, files }; return { id }; } },
         Messages: {
           get: () => ({ payload: { headers: [{ name: 'Message-ID', value: '<orig@x>' }] } }),
           send: (res) => {
+            sentMime.push(Buffer.from(res.raw.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
             const d = decodeRaw(res.raw);
             sent.push({ ...d, threadId: res.threadId || null });
             const t = res.threadId ? threads[res.threadId] : mkThread('t' + (++threadSeq), d.headers.Subject, []);
@@ -114,7 +126,7 @@ function makeEnv() {
     runningEmail = email;
     vm.runInContext('_cachedRunningEmail_ = null; _cachedSendAsList_ = null; _cachedMyEmails_ = null; _cachedFromHeader_ = null;', ctx);
   };
-  return { ctx, userProps, scriptProps, threads, sent, texts, mkThread, mkMessage, actAs };
+  return { sentMime, drafts, ctx, userProps, scriptProps, threads, sent, texts, mkThread, mkMessage, actAs };
 }
 
 let pass = 0;
@@ -614,6 +626,59 @@ test('autopilot: settings are cleaned up when saved', () => {
   assert.strictEqual(s.days[6].on, false);
   assert.strictEqual(E.ctx.studioSaveAutopilot({ maxPerDay: 99999, delayMinutes: 999 }).settings.maxPerDay, 2000);
   assert.strictEqual(E.ctx.getAutopilot_().delayMinutes, 120);
+});
+
+test('MCP API: save, rename-guard, overwrite and delete a sequence', () => {
+  const E = makeEnv();
+  const step = { amount: 3, unit: 'days', message: 'Bump {firstName}' };
+  const r = E.ctx.mcpSaveSequence({ name: 'A', steps: [step, { amount: 4, unit: 'days', message: 'Last' }] });
+  assert.strictEqual(r.saved, 'A'); assert.strictEqual(JSON.parse(E.userProps.seq_A).steps.length, 2);
+  assert.throws(() => E.ctx.mcpSaveSequence({ name: 'A', steps: [step] }), /already exists/);
+  E.ctx.mcpSaveSequence({ name: 'A', overwrite: true, steps: [step] });
+  assert.strictEqual(JSON.parse(E.userProps.seq_A).steps.length, 1);
+  E.ctx.mcpSaveSequence({ name: 'B', originalName: 'A', steps: [step] });
+  assert.ok(!E.userProps.seq_A && E.userProps.seq_B, 'renamed');
+  assert.ok(E.ctx.mcpDeleteSequence('B', false).preview && E.userProps.seq_B, 'preview keeps it');
+  E.ctx.mcpDeleteSequence('B', true);
+  assert.ok(!E.userProps.seq_B);
+  assert.throws(() => E.ctx.mcpDeleteSequence('nope', false), /No sequence/);
+  assert.strictEqual(E.sent.length, 0);
+});
+
+test('attachments: first email, a follow-up via holder draft, then cleanup', () => {
+  const E = makeEnv();
+  const pdf = Buffer.from('%PDF-1.4 quote').toString('base64');
+  const res = E.ctx.mcpSendCampaign({ confirm: true, recipients: 'Jane Roe <jane@acme.com>', subject: 'Quote', body: 'Hi {firstName}',
+    attachments: [{ name: 'quote.pdf', mimeType: 'application/pdf', data: pdf }],
+    followUps: [{ amount: 1, unit: 'minutes', message: 'Specs attached', attachments: [{ name: 'specs.pdf', mimeType: 'application/pdf', data: pdf }] }] });
+  assert.strictEqual(res.sent, 1, JSON.stringify(res));
+  const first = Buffer.from(E.sent[0].raw || '', 'base64');
+  const mime0 = E.sentRaw ? E.sentRaw[0] : null;
+  const step = JSON.parse(E.userProps.custom_t1).steps[0];
+  assert.ok(step.attachDraftId && step.attachNames[0] === 'specs.pdf', JSON.stringify(step));
+  assert.strictEqual(Object.keys(E.drafts).length, 1, 'one holder draft');
+  const data = JSON.parse(E.userProps.custom_t1); data.steps[0].sendAt = Date.now() - 1000;
+  E.userProps.custom_t1 = JSON.stringify(data);
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 2, 'follow-up sent');
+  assert.ok(E.sentMime[0].includes('multipart/mixed') && E.sentMime[0].includes('filename="quote.pdf"'), 'first email has quote.pdf');
+  assert.ok(E.sentMime[1].includes('filename="specs.pdf"') && E.sentMime[1].includes(pdf), 'follow-up has specs.pdf');
+  assert.strictEqual(E.sent[1].threadId, 't1', 'follow-up still threaded');
+  assert.strictEqual(Object.keys(E.drafts).length, 0, 'holder cleaned up');
+});
+
+test('attachments: a saved sequence keeps its holder across reuse', () => {
+  const E = makeEnv();
+  const pdf = Buffer.from('x').toString('base64');
+  E.ctx.mcpSaveSequence({ name: 'S', steps: [{ amount: 1, unit: 'minutes', message: 'm', attachments: [{ name: 'a.pdf', mimeType: 'application/pdf', data: pdf }] }] });
+  E.ctx.mcpSendCampaign({ confirm: true, recipients: 'a@b.co', subject: 's', body: 'b', sequence: 'S' });
+  const data = JSON.parse(E.userProps.custom_t1); data.steps[0].sendAt = Date.now() - 1000;
+  E.userProps.custom_t1 = JSON.stringify(data);
+  E.ctx.processFollowUps();
+  assert.ok(E.sentMime[1].includes('filename="a.pdf"'));
+  assert.strictEqual(Object.keys(E.drafts).length, 1, 'sequence still needs it');
+  E.ctx.mcpDeleteSequence('S', true);
+  assert.strictEqual(Object.keys(E.drafts).length, 0, 'gone once the sequence is deleted');
 });
 
 console.log(`\n${pass} passed`);
