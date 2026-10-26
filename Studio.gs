@@ -90,7 +90,9 @@ function studioSequences_() {
       steps: (Array.isArray(seq.steps) ? seq.steps : []).slice(0, MAX_CAMPAIGN_STEPS).map(normalizeSeqStep_),
       recipients: String(seq.recipients || ''),
       cc: String(seq.cc || ''),
-      bcc: String(seq.bcc || '')
+      bcc: String(seq.bcc || ''),
+      replyMode: String(seq.replyMode || 'last_sender'),
+      stopOnReplyFrom: Array.isArray(seq.stopOnReplyFrom) ? seq.stopOnReplyFrom : []
     };
   });
 }
@@ -155,11 +157,16 @@ function studioSaveSequence(seq) {
     subject: String(seq.subject || ''),
     firstMessage: String(seq.firstMessage || ''),
     steps: rawSteps.map(normalizeSeqStep_),
-    // The Studio doesn't edit these; keep whatever the sidebar saved.
+    // The Studio doesn't edit these; keep whatever the sidebar saved, unless
+    // the caller (the MCP API) passes them.
     recipients: previous.recipients || '',
-    cc: previous.cc || '',
-    bcc: previous.bcc || ''
+    cc: seq.cc !== undefined ? String(seq.cc) : (previous.cc || ''),
+    bcc: seq.bcc !== undefined ? String(seq.bcc) : (previous.bcc || '')
   };
+  const replyMode = seq.replyMode !== undefined ? seq.replyMode : previous.replyMode;
+  if (replyMode && replyMode !== 'last_sender') bundle.replyMode = String(replyMode);
+  const stopOn = seq.stopOnReplyFrom !== undefined ? seq.stopOnReplyFrom : previous.stopOnReplyFrom;
+  if (Array.isArray(stopOn) && stopOn.length) bundle.stopOnReplyFrom = stopOn.map(String);
   if (JSON.stringify(bundle).length > SEQUENCE_MAX_BYTES) {
     throw new Error('This sequence is too long to store (Google limits each to ~9 KB). Shorten the messages.');
   }
@@ -742,15 +749,27 @@ function studioTz_(tz) {
 // (amount/unit/atTime after the previous one) or fires at an exact moment:
 // sendAtAbs is the picked wall-clock encoded as UTC ms, like the sidebar's
 // date picker, and is re-anchored to tz by armThreadWithSteps_.
-function studioSteps_(rawSteps, tz) {
+// allowPast: keep an exact time that has already passed (previews warn instead).
+function studioSteps_(rawSteps, tz, allowPast) {
   const raw = Array.isArray(rawSteps) ? rawSteps : [];
   if (raw.length > MAX_CAMPAIGN_STEPS) throw new Error('At most ' + MAX_CAMPAIGN_STEPS + ' follow-ups.');
   return raw.map(function (s, i) {
     const step = normalizeSeqStep_(s);
+    // Recipient control (set by the MCP API), passed through to the queue.
+    ['to', 'exactRecipients', 'replyMode', 'stopOnReplyFrom', 'stopOnAnyReply'].forEach(function (k) {
+      if (s && s[k] !== undefined) step[k] = s[k];
+    });
+    if (s && s.sendNow) {
+      // "Now": no wait after the previous step; the next scheduler run sends it.
+      step.amount = 0;
+      step.atTime = '';
+      step.sendNow = true;
+      return step;
+    }
     const abs = Number(s && s.sendAtAbs) || 0;
     if (abs > 0) {
       const wall = Utilities.formatDate(new Date(abs), 'UTC', 'yyyy-MM-dd HH:mm');
-      if (Utilities.parseDate(wall, tz, 'yyyy-MM-dd HH:mm').getTime() <= Date.now()) {
+      if (!allowPast && Utilities.parseDate(wall, tz, 'yyyy-MM-dd HH:mm').getTime() <= Date.now()) {
         throw new Error('Follow-up ' + (i + 1) + ': pick a date and time in the future.');
       }
       step.sendAtAbs = abs;

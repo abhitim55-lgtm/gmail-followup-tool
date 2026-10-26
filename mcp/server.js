@@ -53,11 +53,16 @@ export function createGate(now = Date.now) {
 
 // ───────── Tools ─────────────────────────────────────────────────
 
+const addresses = (what) => z.array(z.string()).max(50).optional().describe(what);
+
 const followUpSchema = z.object({
-  wait: z.number().int().positive().optional().describe('How long after the previous email (or after the first email). Used with unit.'),
+  wait: z.number().int().nonnegative().optional().describe('How long after the previous email (or after the first email). Used with unit. 0 = send on the next scheduler run (within about 5 minutes).'),
   unit: z.enum(['days', 'hours', 'minutes']).optional().describe('Unit for wait. Default days.'),
   at_time: z.string().regex(/^\d{1,2}:\d{2}$/).optional().describe('Optional 24h time of day, e.g. "09:30": after waiting, send at this time.'),
-  send_at: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{1,2}:\d{2}$/).optional().describe('Instead of wait: an exact date and time, "YYYY-MM-DD HH:MM", in the campaign timezone.'),
+  send_at: z.string().regex(/^(now|\d{4}-\d{2}-\d{2} \d{1,2}:\d{2})$/).optional().describe('Instead of wait: an exact date and time, "YYYY-MM-DD HH:MM", in the campaign timezone, or "now" for the next scheduler run (within about 5 minutes).'),
+  to: addresses('start_sequence_on_thread only, with reply_mode "custom": To for this one email, replacing the sequence-level to.'),
+  cc: addresses('Cc for this one email. In start_sequence_on_thread (reply_mode "custom") it replaces the sequence-level cc, e.g. to drop someone from the last email; in send_campaign and save_sequence it is added to the campaign cc.'),
+  bcc: addresses('Bcc for this one email. Same rules as cc.'),
   condition: z.enum(['no_reply', 'replied', 'always']).optional().describe('no_reply (default): only if they have not replied. replied: only if they replied. always: no matter what.'),
   message: z.string().optional().describe('Follow-up text. Placeholders: {firstName}, {senderFirstName}. Blank uses the default bump message.'),
   attachments: z.array(z.string()).max(10).optional().describe('Files to attach to this follow-up, as full paths on this computer.')
@@ -67,12 +72,19 @@ const followUpSchema = z.object({
 // preview just lists names, so nothing heavy goes to Google twice).
 function toStep(f, withFiles = false) {
   const step = { amount: f.wait, unit: f.unit || 'days', atTime: f.at_time || '', condition: f.condition || 'no_reply', message: f.message || '' };
+  const override = {};
+  for (const k of ['to', 'cc', 'bcc']) if (f[k] !== undefined) override[k] = f[k];
+  if (Object.keys(override).length) step.override = override;
   if (f.attachments && f.attachments.length) {
     const files = readAttachments(f.attachments);
     if (withFiles) step.attachments = files.map((x) => ({ name: x.name, mimeType: x.mimeType, data: x.data }));
     else step.attachNames = files.map((x) => x.name);
   }
-  if (f.send_at) {
+  if (f.send_at === 'now' || (f.wait === 0 && !f.send_at)) {
+    step.sendNow = true;
+    step.amount = 0;
+    step.atTime = '';
+  } else if (f.send_at) {
     // The script takes an exact time as the wall clock encoded as UTC ms.
     const [d, t] = f.send_at.split(' ');
     step.sendAtAbs = Date.parse(d + 'T' + t.padStart(5, '0') + ':00Z');
@@ -115,6 +127,7 @@ const INSTRUCTIONS = [
   'Gmail Follow-ups sends emails and follow-up replies from the user\'s own Gmail account. Follow-ups reply on the same thread and stop by themselves when the person replies.',
   'One request can do everything: when the user describes who to email, what to say and what follow-ups to send, build it with the tools here. Use send_campaign with follow_ups written inline (no need to save a sequence first), or save_sequence first if they want to reuse it.',
   'For an email they already sent, find it with list_sent_threads, then start_sequence_on_thread with a saved sequence or inline follow_ups.',
+  'Who follow-ups go to: by default the last person outside the user\'s company who wrote on the thread (colleagues are never followed up with). In multi-party threads, ask or check who the client is and use reply_mode "custom" with to/cc (and stop_on_reply_from with the client\'s domains), or reply_mode "reply_all". Replies from the user\'s own colleagues never stop a sequence unless stop_on_any_reply is true.',
   'Anything that sends, schedules, stops or deletes returns a preview first. Show the preview, including every warning, and ask the user. Only after a clear yes, call again with confirm: true and the confirmation_code.',
   'Attachments: give full file paths on this computer. The first email takes attachments in send_campaign; any follow-up (inline or in save_sequence) takes its own. 15 MB total per request. A follow-up\'s files are kept in a Gmail draft titled "[Follow-ups] attachment holder" until they are sent; tell the user not to delete it.',
   'Do not look for or edit this tool\'s files on disk; everything goes through these tools. If a tool says the user is not signed in, use sign_in.'
@@ -126,7 +139,7 @@ const json = (title, obj) => text(title + '\n\n' + JSON.stringify(obj, null, 2))
 const PREVIEW_NOTE = 'NOTHING HAS BEEN DONE YET. Show the user this preview (recipients, the email, follow-up dates and every warning) and ask them to confirm. Only if they clearly say yes, call the tool again with exactly the same arguments plus confirm: true and confirmation_code: ';
 
 export function buildServer({ run = appsScript.run } = {}) {
-  const server = new McpServer({ name: 'gmail-followup', version: '1.1.0' }, { instructions: INSTRUCTIONS });
+  const server = new McpServer({ name: 'gmail-followup', version: '1.2.0' }, { instructions: INSTRUCTIONS });
   const gate = createGate();
 
   // Wraps a handler so failures come back as readable tool errors.
@@ -156,7 +169,7 @@ export function buildServer({ run = appsScript.run } = {}) {
 
   tool('status', {
     title: 'Status',
-    description: 'Which Gmail account is sending, whether the follow-up scheduler is running, when it last ran, test mode, timezone. Start here if something seems off.',
+    description: 'Which Gmail account is sending, whether the follow-up scheduler is running, when it last ran, test mode, timezone, the user\'s own company domains, and every scheduled follow-up with its To/Cc/Bcc. Start here if something seems off.',
     annotations: { readOnlyHint: true }
   }, async () => json('Follow-Up Tool status:', await run('mcpStatus')));
 
@@ -171,7 +184,7 @@ export function buildServer({ run = appsScript.run } = {}) {
 
   tool('list_campaigns', {
     title: 'List running campaigns',
-    description: 'Threads with follow-ups still scheduled: who, subject, how many steps are left and when the next one goes out.',
+    description: 'Threads with follow-ups still scheduled: subject, and for every scheduled follow-up when it goes out and its To, Cc and Bcc (as the thread stands now).',
     annotations: { readOnlyHint: true }
   }, async () => {
     const list = await run('mcpListCampaigns');
@@ -187,11 +200,17 @@ export function buildServer({ run = appsScript.run } = {}) {
 
   tool('start_sequence_on_thread', {
     title: 'Start a sequence on a sent email',
-    description: 'Schedule follow-ups as replies on an email the user already sent: either a saved sequence (sequence) or follow-ups written right here (follow_ups). Find the email with list_sent_threads. First call (no confirm) only returns a preview with dates and warnings. After the user approves, call again with confirm: true and the confirmation_code from the preview.',
+    description: 'Schedule follow-ups as replies on an email the user already sent: either a saved sequence (sequence) or follow-ups written right here (follow_ups). Every follow-up stays in the same Gmail thread ("Re: <subject>", replying to the latest message when it sends). Find the email with list_sent_threads. First call (no confirm) only returns a preview: To, Cc, Bcc, send time, condition and the full message of every follow-up, plus warnings. After the user approves, call again with confirm: true and the confirmation_code from the preview.',
     inputSchema: {
       thread_id: z.string().describe('threadId from list_sent_threads.'),
       sequence: z.string().optional().describe('Saved sequence name from list_sequences. Takes priority over follow_ups.'),
       follow_ups: z.array(followUpSchema).max(10).optional().describe('Follow-ups written for this email, if not using a saved sequence.'),
+      reply_mode: z.enum(['last_sender', 'reply_all', 'custom']).optional().describe('Who follow-ups go to. last_sender (default): the last person outside the user\'s company who wrote. reply_all: everyone on the latest message, minus the user (colleagues go in Cc). custom: exactly to/cc/bcc; required whenever to, cc or bcc is given.'),
+      to: addresses('reply_mode "custom": To for every follow-up (at least one).'),
+      cc: addresses('reply_mode "custom": Cc for every follow-up.'),
+      bcc: addresses('reply_mode "custom": Bcc for every follow-up.'),
+      stop_on_reply_from: z.array(z.string()).max(20).optional().describe('Domains or addresses whose reply stops the "if no reply" follow-ups, e.g. ["jotun.com", "jotun.ae"]. Default: anyone in To/Cc outside the user\'s company (custom), or anyone outside it.'),
+      stop_on_any_reply: z.boolean().optional().describe('Also stop when one of the user\'s own colleagues replies. Default false.'),
       campaign_name: z.string().optional().describe('Optional label to find this later.'),
       timezone: z.string().optional().describe('IANA timezone for the send times, e.g. "Asia/Kolkata". Default: the user\'s saved timezone.'),
       confirm: z.boolean().optional(),
@@ -201,6 +220,10 @@ export function buildServer({ run = appsScript.run } = {}) {
     totalAttachmentBytes(args);
     const p = { threadId: args.thread_id, sequence: args.sequence || '', followUps: (args.follow_ups || []).map((f) => toStep(f)),
       campaignName: args.campaign_name || '', tz: args.timezone || '' };
+    if (args.reply_mode) p.replyMode = args.reply_mode;
+    for (const k of ['to', 'cc', 'bcc']) if (args[k] !== undefined) p[k] = args[k];
+    if (args.stop_on_reply_from !== undefined) p.stopOnReplyFrom = args.stop_on_reply_from;
+    if (args.stop_on_any_reply) p.stopOnAnyReply = true;
     if (!args.confirm) {
       const pv = await run('mcpStartSequenceOnThread', [p]);
       const code = gate.issue('start', args);
@@ -226,8 +249,8 @@ export function buildServer({ run = appsScript.run } = {}) {
       follow_ups: z.array(followUpSchema).max(10).optional().describe('Follow-ups to schedule, in order, if not using a saved sequence.'),
       campaign_name: z.string().optional().describe('Optional label to find this campaign later.'),
       attachments: z.array(z.string()).max(10).optional().describe('Files to attach to the FIRST email, as full paths on this computer (e.g. "C:\\Users\\me\\Downloads\\quote.pdf" or "/Users/me/Downloads/quote.pdf"). Follow-ups take their own attachments inside follow_ups. 15 MB in total across the first email and all follow-ups.'),
-      cc: z.string().optional(),
-      bcc: z.string().optional(),
+      cc: z.union([z.string(), z.array(z.string())]).optional().describe('Cc on the first email and every follow-up of each recipient.'),
+      bcc: z.union([z.string(), z.array(z.string())]).optional().describe('Bcc on the first email and every follow-up.'),
       timezone: z.string().optional().describe('IANA timezone for follow-up times. Default: the user\'s saved timezone.'),
       confirm: z.boolean().optional(),
       confirmation_code: z.string().optional()
@@ -238,7 +261,7 @@ export function buildServer({ run = appsScript.run } = {}) {
       subject: args.subject, body: args.body,
       sequence: args.sequence || '',
       followUps: (args.follow_ups || []).map((f) => toStep(f)),
-      campaignName: args.campaign_name || '', cc: args.cc || '', bcc: args.bcc || '', tz: args.timezone || ''
+      campaignName: args.campaign_name || '', cc: [].concat(args.cc || []).join(', '), bcc: [].concat(args.bcc || []).join(', '), tz: args.timezone || ''
     };
     totalAttachmentBytes(args);
     const files = readAttachments(args.attachments);
@@ -270,6 +293,10 @@ export function buildServer({ run = appsScript.run } = {}) {
       follow_ups: z.array(followUpSchema).min(1).max(10).describe('The follow-ups, in order. Each needs wait (and unit) and usually a message.'),
       subject: z.string().optional().describe('Optional subject that pre-fills a new campaign.'),
       first_message: z.string().optional().describe('Optional first email that pre-fills a new campaign.'),
+      cc: addresses('Default Cc for every follow-up of this sequence.'),
+      bcc: addresses('Default Bcc for every follow-up of this sequence.'),
+      reply_mode: z.enum(['last_sender', 'reply_all', 'custom']).optional().describe('Default reply_mode when this sequence is started on a thread (custom then still needs to there).'),
+      stop_on_reply_from: z.array(z.string()).max(20).optional().describe('Default stop_on_reply_from (domains or addresses).'),
       original_name: z.string().optional().describe('When editing: the current name of the sequence.'),
       overwrite: z.boolean().optional().describe('Replace an existing sequence with the same name.')
     }
@@ -277,13 +304,18 @@ export function buildServer({ run = appsScript.run } = {}) {
     const steps = args.follow_ups.map((f) => {
       if (f.send_at) throw new Error('Sequences are reusable, so use wait/unit (and at_time), not an exact send_at date.');
       if (!f.wait) throw new Error('Every follow-up in a sequence needs a wait (e.g. wait: 3, unit: "days").');
+      if (f.to) throw new Error('A saved sequence is reused on many threads, so a follow-up cannot have its own to. Give to when starting it with start_sequence_on_thread.');
       return toStep(f, true);
     });
     totalAttachmentBytes(args);
-    const res = await run('mcpSaveSequence', [{
+    const seq = {
       name: args.name, originalName: args.original_name || '', overwrite: !!args.overwrite,
       subject: args.subject || '', firstMessage: args.first_message || '', steps
-    }]);
+    };
+    for (const k of ['cc', 'bcc']) if (args[k] !== undefined) seq[k] = args[k];
+    if (args.reply_mode) seq.replyMode = args.reply_mode;
+    if (args.stop_on_reply_from !== undefined) seq.stopOnReplyFrom = args.stop_on_reply_from;
+    const res = await run('mcpSaveSequence', [seq]);
     return json('Saved sequence "' + args.name + '".', res);
   });
 

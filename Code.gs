@@ -327,26 +327,18 @@ function lastRunReport(n) {
 function processCustomThread_(thread, label, data, myEmails, cutoff, gate) {
   const props = PropertiesService.getUserProperties();
   const key = 'custom_' + thread.getId();
-  const messages = thread.getMessages();
+  const messages = threadMessages_(thread);
 
-  // Locate my last outbound and the most recent inbound — used as fallbacks
-  // when a step does not specify explicit recipients.
   let myLastIdx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (isFromMe_(messages[i], myEmails)) { myLastIdx = i; break; }
   }
-  let lastInbound = null;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (!isFromMe_(messages[i], myEmails)) { lastInbound = messages[i]; break; }
-  }
-
-  const myLast = myLastIdx !== -1 ? messages[myLastIdx] : null;
 
   let sentAny = false;
   let idx = 0;
   while (idx < data.steps.length && data.steps[idx].sendAt <= Date.now()) {
     const step = data.steps[idx];
-    const explicitMode = !!step.to;
+    const explicitMode = !!step.to || step.replyMode === 'reply_all';
 
     // Thread-mode steps need at least one outbound from us; otherwise nothing
     // to reply to. Explicit mode is allowed even without prior outbound.
@@ -388,38 +380,26 @@ function processCustomThread_(thread, label, data, myEmails, cutoff, gate) {
       }
       continue;
     }
-    // Per-step recipient resolution. Priority: explicit > inbound sender > cold-derive.
-    let toAddr = '', ccAddr = '', recipientName = '';
-    if (step.to) {
-      toAddr = step.to;
-      const first = parseAddressList_(toAddr)[0];
-      if (first) recipientName = first.name || '';
-    } else if (lastInbound) {
-      const p = parseAddress_(lastInbound.getFrom());
-      toAddr = p.email;
-      recipientName = p.name;
-    } else if (myLast) {
-      const recipients = deriveColdRecipients_(messages, myEmails);
-      if (!recipients.to) {
-        Logger.log('Custom: could not derive non-self recipients for "' +
-          thread.getFirstMessageSubject() + '" — clearing.');
-        thread.removeLabel(label);
-        props.deleteProperty(key);
-        return sentAny;
-      }
-      toAddr = recipients.to;
-      ccAddr = recipients.cc;
-      const first = parseAddressList_(toAddr)[0];
-      if (first) recipientName = first.name || '';
-    } else {
+    // Worked out now, at send time, so the latest message on the thread counts.
+    const recips = resolveStepRecipients_(messages, step, myEmails);
+    if (!recips.to) {
       Logger.log('Custom: no recipients resolvable for step on "' +
         thread.getFirstMessageSubject() + '" — clearing.');
       thread.removeLabel(label);
       props.deleteProperty(key);
       return sentAny;
     }
+    const toAddr = recips.to, ccAddr = recips.cc, bccAddr = recips.bcc;
+    // Worked-out recipients (not ones the user typed in custom mode) that are
+    // only colleagues: never follow up with the team. Stop and say why.
+    if (!step.to && !hasExternal_(toAddr, myEmails)) {
+      thread.removeLabel(label);
+      props.deleteProperty(key);
+      throw new Error('stopped: the follow-up would only go to colleagues (' + toAddr +
+        '). Start it again with reply_mode "custom" and the client in to.');
+    }
 
-    const firstName = firstNameOf_(recipientName) || 'there';
+    const firstName = firstNameOf_(recips.name) || 'there';
     const tmpl = step.message || CONFIG.defaultTemplate;
     const rendered = tmpl
       .replace(/\{firstName\}/g, firstName)
@@ -438,10 +418,6 @@ function processCustomThread_(thread, label, data, myEmails, cutoff, gate) {
     }
 
     const html = text.replace(/\n/g, '<br>');
-    // Additive: per-step / campaign-level cc and bcc layer on top of any
-    // thread-derived defaults without replacing them.
-    ccAddr = mergeRecipients_(ccAddr, step.cc || '');
-    const bccAddr = (step.bcc || '').trim();
     const replyAnchor = messages[messages.length - 1] || null;
     let attachments = [];
     if (step.attachDraftId) {
@@ -463,6 +439,9 @@ function processCustomThread_(thread, label, data, myEmails, cutoff, gate) {
     data.steps.splice(idx, 1);
     sentAny = true;
     if (gate) gate.record();
+    // Save right away: if a later step this run throws, this one must not
+    // still be queued, or it would go out again on the next run.
+    props.setProperty(key, JSON.stringify(data));
   }
 
   if (data.steps.length === 0) {
@@ -731,12 +710,18 @@ function isFromMe_(message, myEmails) {
 // Merge two comma-separated recipient lists, deduping by lowercased email.
 // Either side may be blank/missing. Used to layer per-step or campaign-level
 // CC/BCC on top of thread-derived defaults without double-listing anyone.
+// Split a header list on commas outside quotes, so "Sehgal, Ravi" <r@x.com>
+// stays one address.
+function splitAddresses_(s) {
+  return String(s || '').split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+}
+
 function mergeRecipients_(a, b) {
   const seen = {};
   const out = [];
   function add(list) {
     if (!list) return;
-    String(list).split(',').forEach(function (s) {
+    splitAddresses_(list).forEach(function (s) {
       const trimmed = s.trim();
       if (!trimmed) return;
       const email = parseAddress_(trimmed).email.toLowerCase();
@@ -757,8 +742,7 @@ function mergeRecipients_(a, b) {
 function stripSelfRecipients_(headerValue, myEmails) {
   if (!headerValue) return '';
   const lower = myEmails.map(function (e) { return e.toLowerCase(); });
-  return headerValue
-    .split(',')
+  return splitAddresses_(headerValue)
     .map(function (s) { return s.trim(); })
     .filter(function (s) {
       if (!s) return false;
@@ -796,8 +780,7 @@ function parseAddress_(s) {
 // Split a comma-separated header value (To: / Cc:) into [{name, email}, ...].
 function parseAddressList_(s) {
   if (!s) return [];
-  return String(s)
-    .split(',')
+  return splitAddresses_(s)
     .map(function (c) { return c.trim(); })
     .filter(function (c) { return c.length > 0; })
     .map(parseAddress_);
@@ -1506,11 +1489,18 @@ function actionStartSequence(e) {
   if (!seq || !Array.isArray(seq.steps) || seq.steps.length === 0) {
     return notify_('Sequence "' + name + '" not found or has no follow-ups.');
   }
-  const steps = seq.steps.slice(0, MAX_CAMPAIGN_STEPS).map(normalizeSeqStep_);
+  if (seq.replyMode === 'custom') {
+    return notify_('"' + name + '" sends to people you pick per thread. Start it from Claude with the recipients.');
+  }
+  const steps = seq.steps.slice(0, MAX_CAMPAIGN_STEPS).map(normalizeSeqStep_).map(function (s) {
+    if (seq.replyMode) s.replyMode = seq.replyMode;
+    if (Array.isArray(seq.stopOnReplyFrom) && seq.stopOnReplyFrom.length) s.stopOnReplyFrom = seq.stopOnReplyFrom;
+    return s;
+  });
   const tz = getPreferredTz_();
   const armed = armThreadWithSteps_(threadId, steps, {
     tz: tz,
-    recipients: seq.recipients || '',
+    recipients: seq.replyMode === 'reply_all' ? '' : (seq.recipients || ''),
     cc: seq.cc || '',
     bcc: seq.bcc || ''
   });
@@ -2195,8 +2185,11 @@ function armThreadWithSteps_(threadId, steps, opts) {
       sendAt = computeStepSendAt_(prevMs, s.amount, s.unit, s.atTime, tz);
     }
     prevMs = sendAt;
-    const stepCc = mergeRecipients_(campaignCc, s.cc || '');
-    const stepBcc = mergeRecipients_(campaignBcc, s.bcc || '');
+    // exactRecipients: to/cc/bcc already final for this step (custom mode),
+    // not layered on the campaign-level lists.
+    const stepCc = s.exactRecipients ? String(s.cc || '') : mergeRecipients_(campaignCc, s.cc || '');
+    const stepBcc = s.exactRecipients ? String(s.bcc || '') : mergeRecipients_(campaignBcc, s.bcc || '');
+    const stepTo = s.exactRecipients ? String(s.to || '') : recipientsField;
     const obj = {
       sendAt: sendAt,
       message: s.message,
@@ -2204,9 +2197,12 @@ function armThreadWithSteps_(threadId, steps, opts) {
       createdAt: now,
       condition: s.condition || 'no_reply'
     };
-    if (recipientsField) obj.to = recipientsField;
+    if (stepTo) obj.to = stepTo;
     if (stepCc) obj.cc = stepCc;
     if (stepBcc) obj.bcc = stepBcc;
+    if (s.replyMode && s.replyMode !== 'last_sender') obj.replyMode = s.replyMode;
+    if (Array.isArray(s.stopOnReplyFrom) && s.stopOnReplyFrom.length) obj.stopOnReplyFrom = s.stopOnReplyFrom;
+    if (s.stopOnAnyReply) obj.stopOnAnyReply = true;
     if (s.attachDraftId) {
       obj.attachDraftId = s.attachDraftId;
       obj.attachNames = s.attachNames || [];
@@ -2552,28 +2548,191 @@ function evaluateStepCondition_(condition, hasReply) {
   }
 }
 
-// True if a reply has arrived that should count against this step.
-// Explicit-recipient mode: any message from a listed recipient after the
-// step was scheduled. Thread mode: any non-self message after my last outbound.
+// True if a reply has arrived that should count against this step. Mail from
+// me or a colleague on my own domain never counts.
+//   stopOnReplyFrom set: a message from one of those domains/addresses.
+//   Explicit To (custom mode): a message from anyone on the step's To/Cc.
+//   Reply-all: a message from anyone outside my domain.
+// Those three count messages since the step was scheduled. Thread mode (the
+// default): any message after my last outbound.
 function stepHasReply_(messages, step, myEmails, myLastIdx) {
-  if (step && step.to) {
-    const targets = parseAddressList_(step.to)
-      .map(function (a) { return a.email.toLowerCase(); })
-      .filter(function (e) { return e.length > 0; });
+  step = step || {};
+  const stopList = Array.isArray(step.stopOnReplyFrom) ? step.stopOnReplyFrom : [];
+  const targets = (step.to && step.replyMode !== 'reply_all')
+    ? parseAddressList_(mergeRecipients_(step.to, step.cc || '')).map(function (a) { return a.email.toLowerCase(); })
+    : null;
+  function counts(m) {
+    const from = parseAddress_(m.getFrom()).email.toLowerCase();
+    if (!from || isFromMe_(m, myEmails)) return false;
+    // stopOnAnyReply: a colleague's reply stops it too.
+    if (isOwnDomain_(from, myEmails)) return !!step.stopOnAnyReply;
+    if (stopList.length) return matchesStopList_(from, stopList);
+    if (targets) return targets.indexOf(from) !== -1;
+    return true;
+  }
+  if (step.to || stopList.length || step.replyMode === 'reply_all') {
     const sinceMs = step.createdAt || 0;
-    for (let i = 0; i < messages.length; i++) {
-      const m = messages[i];
-      if (m.getDate().getTime() <= sinceMs) continue;
-      const fromEmail = parseAddress_(m.getFrom()).email.toLowerCase();
-      if (fromEmail && targets.indexOf(fromEmail) !== -1) return true;
-    }
-    return false;
+    return messages.some(function (m) { return m.getDate().getTime() > sinceMs && counts(m); });
   }
   if (myLastIdx === -1) return false;
   for (let i = myLastIdx + 1; i < messages.length; i++) {
-    if (!isFromMe_(messages[i], myEmails)) return true;
+    if (counts(messages[i])) return true;
   }
   return false;
+}
+
+
+// ───────── Recipient control ───────────────────────────────────────
+//
+// Who a follow-up goes to (replyMode on the step):
+//   last_sender (default)  the last person who wrote to me on the thread
+//   reply_all              everyone on the latest message, minus me
+//   custom                 exactly step.to / cc / bcc
+// Worked out when the step sends, not when it was scheduled.
+
+// Free-mail providers (any country variant): there "my domain" is just my
+// own addresses.
+const PUBLIC_MAIL_RE = /^(gmail|googlemail|yahoo|ymail|rocketmail|hotmail|outlook|live|msn|icloud|me|mac|aol|proton|protonmail|pm|gmx|zoho|zohomail|rediffmail|yandex|mail|inbox|fastmail|tutanota|qq|163|126|naver|hanmail)\./;
+
+function domainOf_(email) {
+  const s = String(email || '').toLowerCase();
+  return s.indexOf('@') === -1 ? '' : s.slice(s.lastIndexOf('@') + 1);
+}
+
+// My company domain (procmart.com): the running account's own domain, unless
+// it is a free-mail one. Send-as aliases don't count, so an alias on some
+// provider never turns that provider's users into "colleagues".
+function myDomains_() {
+  const d = domainOf_(getRunningEmail_());
+  return d && !PUBLIC_MAIL_RE.test(d) ? [d] : [];
+}
+
+// Me, or a colleague on my company domain (or a subdomain of it).
+function isOwnDomain_(email, myEmails) {
+  const e = String(email || '').toLowerCase();
+  if (!e) return false;
+  if ((myEmails || []).indexOf(e) !== -1) return true;
+  const d = domainOf_(e);
+  return myDomains_().some(function (x) { return d === x || d.slice(-(x.length + 1)) === '.' + x; });
+}
+
+// True when the list has at least one valid address outside my company.
+function hasExternal_(list, myEmails) {
+  return parseAddressList_(list).some(function (a) { return isValidEmail_(a.email) && !isOwnDomain_(a.email, myEmails); });
+}
+
+// entries: "jotun.com" (that domain and its subdomains) or "jane@acme.com".
+function matchesStopList_(email, entries) {
+  const e = String(email || '').toLowerCase();
+  const d = domainOf_(e);
+  return (entries || []).some(function (x) {
+    x = String(x || '').trim().toLowerCase().replace(/^@/, '');
+    if (!x) return false;
+    if (x.indexOf('@') !== -1) return x === e;
+    return d === x || d.slice(-(x.length + 1)) === '.' + x;
+  });
+}
+
+function isValidEmail_(s) {
+  return /^[^@\s<>,;"]+@[^@\s<>,;"]+\.[^@\s<>,;".]{2,}$/.test(String(s || '').trim());
+}
+
+// Thread messages without unsent drafts, so a draft is never the reply anchor.
+function threadMessages_(thread) {
+  return thread.getMessages().filter(function (m) {
+    return !(typeof m.isDraft === 'function' && m.isDraft());
+  });
+}
+
+// Everyone on the latest message, minus me: its sender and To in To, its Cc in Cc.
+function replyAllRecipients_(messages, myEmails) {
+  const last = messages[messages.length - 1];
+  if (!last) return { to: '', cc: '' };
+  const to = isFromMe_(last, myEmails)
+    ? stripSelfRecipients_(last.getTo(), myEmails)
+    : stripSelfRecipients_(mergeRecipients_(last.getFrom(), last.getTo()), myEmails);
+  const fmt = function (a) { return a.name ? '"' + a.name + '" <' + a.email + '>' : a.email; };
+  // Colleagues move from To to Cc: the follow-up is addressed to the client.
+  const toAll = parseAddressList_(to);
+  const external = toAll.filter(function (a) { return !isOwnDomain_(a.email, myEmails); });
+  const internal = toAll.filter(function (a) { return isOwnDomain_(a.email, myEmails); });
+  const toList = external.length ? external : toAll;
+  const inTo = toList.map(function (a) { return a.email.toLowerCase(); });
+  const ccList = (external.length ? internal : []).concat(parseAddressList_(stripSelfRecipients_(last.getCc(), myEmails)))
+    .filter(function (a) { return inTo.indexOf(a.email.toLowerCase()) === -1; });
+  return { to: toList.map(fmt).join(', '), cc: mergeRecipients_(ccList.map(fmt).join(', '), '') };
+}
+
+// A display name for a bare address, from the thread's own headers, so
+// {firstName} works for custom recipients given as plain emails.
+function nameFromThread_(messages, email) {
+  const e = String(email || '').toLowerCase();
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    const all = parseAddressList_([m.getFrom(), m.getTo(), m.getCc()].filter(String).join(', '));
+    for (let j = 0; j < all.length; j++) {
+      if (all[j].email.toLowerCase() === e && all[j].name) return all[j].name;
+    }
+  }
+  return '';
+}
+
+// { to, cc, bcc, name } for a step, from the thread as it is now. to is ''
+// when nobody can be worked out. name: the first To's display name.
+function resolveStepRecipients_(messages, step, myEmails) {
+  let to = '', cc = '';
+  if (step.replyMode === 'reply_all') {
+    const r = replyAllRecipients_(messages, myEmails);
+    to = r.to;
+    cc = mergeRecipients_(r.cc, step.cc || '');
+  } else if (step.to) {
+    to = step.to;
+    cc = step.cc || '';
+  } else {
+    // The last person outside my company who wrote. A colleague's email on the
+    // thread is skipped: follow-ups are for the client, not the team.
+    let lastInbound = null, anyMine = false;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (isFromMe_(messages[i], myEmails)) anyMine = true;
+      else if (!lastInbound && !isOwnDomain_(parseAddress_(messages[i].getFrom()).email, myEmails)) {
+        lastInbound = messages[i];
+      }
+    }
+    if (lastInbound) {
+      const p = parseAddress_(lastInbound.getFrom());
+      return { to: p.email, cc: step.cc || '', bcc: String(step.bcc || '').trim(), name: p.name };
+    }
+    if (anyMine) {
+      const cold = deriveColdRecipients_(messages, myEmails);
+      to = cold.to;
+      cc = mergeRecipients_(cold.cc, step.cc || '');
+    }
+  }
+  const first = parseAddressList_(to)[0];
+  const name = first ? (first.name || nameFromThread_(messages, first.email)) : '';
+  return { to: to, cc: cc, bcc: String(step.bcc || '').trim(), name: name };
+}
+
+// Countries whose weekend is Friday–Saturday, by ccTLD and by timezone.
+const FRI_SAT_TLDS = ['sa', 'qa', 'kw', 'bh', 'om', 'eg', 'jo', 'iq', 'ly', 'dz', 'sd', 'ye', 'il'];
+const FRI_SAT_TZS = ['Asia/Riyadh', 'Asia/Qatar', 'Asia/Kuwait', 'Asia/Bahrain', 'Asia/Muscat', 'Africa/Cairo',
+  'Asia/Amman', 'Asia/Baghdad', 'Asia/Jerusalem'];
+
+// Which days are the weekend for this address (0 = Sunday … 6 = Saturday).
+// The country comes from the domain's ccTLD; a .com falls back to the
+// campaign timezone.
+function recipientWeekend_(email, tz) {
+  const tld = domainOf_(email).split('.').pop();
+  if (FRI_SAT_TLDS.indexOf(tld) !== -1) return { days: [5, 6], label: 'Fri–Sat' };
+  if (tld.length === 2) return { days: [0, 6], label: 'Sat–Sun' };
+  if (FRI_SAT_TZS.indexOf(tz) !== -1) return { days: [5, 6], label: 'Fri–Sat' };
+  return { days: [0, 6], label: 'Sat–Sun' };
+}
+
+// Day of the week of ms in tz (0 = Sunday).
+function weekdayIn_(ms, tz) {
+  const ymd = Utilities.formatDate(new Date(ms), tz, 'yyyy-MM-dd');
+  return new Date(ymd + 'T00:00:00Z').getUTCDay();
 }
 
 

@@ -681,4 +681,200 @@ test('attachments: a saved sequence keeps its holder across reuse', () => {
   assert.strictEqual(Object.keys(E.drafts).length, 0, 'gone once the sequence is deleted');
 });
 
-console.log(`\n${pass} passed`);
+// ───────── Recipient control ───────────────────────────────────────
+
+// Multi-party thread: I wrote to the client, then a colleague wrote last.
+function jotunEnv() {
+  const E = makeEnv();
+  const day = 86400000, t0 = Date.now() - 3 * day;
+  E.mkThread('tj', 'Jotun paint supply', [
+    E.mkMessage({ from: 'Abhishek Sehgal <' + ME + '>', to: 'Udeshini Edirisooriya <udeshini.edirisooriya@jotun.com>, libu.kuriakose@jotun.ae',
+      cc: 'kashif.ahmed@procmart.com', date: t0 }),
+    E.mkMessage({ from: 'Kashif Ahmed <kashif.ahmed@procmart.com>', to: 'udeshini.edirisooriya@jotun.com', cc: ME, date: t0 + day })
+  ]);
+  return E;
+}
+const JOTUN = {
+  threadId: 'tj', replyMode: 'custom',
+  to: ['udeshini.edirisooriya@jotun.com', 'libu.kuriakose@jotun.ae'],
+  cc: ['kashif.ahmed@procmart.com', 'ashutosh.dhar@procmart.com', 'abhishek@procmart.com'],
+  stopOnReplyFrom: ['jotun.com', 'jotun.ae'],
+  followUps: [{ amount: 2, unit: 'days', message: 'Hi {firstName}, any update?' },
+              { amount: 3, unit: 'days', message: 'Last one', override: { cc: ['kashif.ahmed@procmart.com'] } }]
+};
+const due = (E, id) => { const d = JSON.parse(E.userProps['custom_' + id]); d.steps[0].sendAt = Date.now() - 1000; E.userProps['custom_' + id] = JSON.stringify(d); };
+
+test('custom recipients: preview shows exact To/CC per follow-up, override on one', () => {
+  const E = jotunEnv();
+  const pv = E.ctx.mcpStartSequenceOnThread(JOTUN);
+  assert.strictEqual(pv.replyMode, 'custom');
+  assert.strictEqual(pv.followUps[0].to, 'udeshini.edirisooriya@jotun.com, libu.kuriakose@jotun.ae');
+  assert.strictEqual(pv.followUps[0].cc, 'kashif.ahmed@procmart.com, ashutosh.dhar@procmart.com, abhishek@procmart.com');
+  assert.strictEqual(pv.followUps[1].cc, 'kashif.ahmed@procmart.com');
+  assert.ok(pv.followUps[0].message.startsWith('Hi Udeshini, any update?'), pv.followUps[0].message);
+  assert.ok(/ Asia\/Jakarta$/.test(pv.followUps[0].when) || /[A-Z]/.test(pv.followUps[0].when));
+  assert.strictEqual(pv.thread.replySubject, 'Re: Jotun paint supply');
+  assert.ok(/jotun\.com, jotun\.ae/.test(pv.stopsWhen) && /procmart\.com never stop/.test(pv.stopsWhen));
+  assert.strictEqual(E.sent.length, 0); assert.ok(!E.userProps.custom_tj);
+});
+
+test('custom recipients: validation', () => {
+  const E = jotunEnv();
+  assert.throws(() => E.ctx.mcpStartSequenceOnThread({ ...JOTUN, to: ['not-an-email'] }), /valid email.*not-an-email/);
+  assert.throws(() => E.ctx.mcpStartSequenceOnThread({ ...JOTUN, to: [] }), /at least one address in to/);
+  assert.throws(() => E.ctx.mcpStartSequenceOnThread({ ...JOTUN, replyMode: undefined }), /reply_mode: "custom"/);
+  assert.throws(() => E.ctx.mcpStartSequenceOnThread({ ...JOTUN, stopOnReplyFrom: ['jotun'] }), /not a domain/);
+  assert.throws(() => E.ctx.mcpStartSequenceOnThread({ ...JOTUN, replyMode: 'everyone' }), /reply_mode must be/);
+});
+
+test('acceptance: sends to the client in the same thread; colleague reply does not stop it, client reply does', () => {
+  const E = jotunEnv();
+  E.ctx.mcpStartSequenceOnThread({ ...JOTUN, confirm: true });
+  // Kashif replies after scheduling: must not stop it.
+  E.threads.tj.messages.push(E.mkMessage({ from: 'Kashif Ahmed <kashif.ahmed@procmart.com>', to: ME, date: Date.now() + 1000 }));
+  due(E, 'tj');
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 1, 'first follow-up sent despite colleague reply');
+  const fu = E.sent[0];
+  assert.strictEqual(fu.threadId, 'tj');
+  assert.strictEqual(fu.headers.Subject, 'Re: Jotun paint supply');
+  assert.strictEqual(fu.headers.To, 'udeshini.edirisooriya@jotun.com, libu.kuriakose@jotun.ae');
+  assert.strictEqual(fu.headers.Cc, 'kashif.ahmed@procmart.com, ashutosh.dhar@procmart.com, abhishek@procmart.com');
+  assert.strictEqual(fu.headers['In-Reply-To'], '<orig@x>');
+  assert.ok(fu.text.startsWith('Hi Udeshini'));
+  // Udeshini replies: the rest is cancelled.
+  E.threads.tj.messages.push(E.mkMessage({ from: 'Udeshini <udeshini.edirisooriya@jotun.com>', to: ME, date: Date.now() + 2000 }));
+  due(E, 'tj');
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 1, 'no follow-up after the client replied');
+  assert.ok(!E.userProps.custom_tj);
+});
+
+test('stop_on_any_reply: a colleague reply stops it when asked', () => {
+  const E = jotunEnv();
+  E.ctx.mcpStartSequenceOnThread({ ...JOTUN, stopOnAnyReply: true, confirm: true });
+  E.threads.tj.messages.push(E.mkMessage({ from: 'kashif.ahmed@procmart.com', to: ME, date: Date.now() + 1000 }));
+  due(E, 'tj');
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 0);
+});
+
+test('default mode skips colleagues: replies to the last external sender', () => {
+  const E = jotunEnv();
+  E.threads.tj.messages.splice(1, 0, E.mkMessage({ from: 'Libu K <libu.kuriakose@jotun.ae>', to: ME, date: Date.now() - 2 * 86400000 }));
+  const pv = E.ctx.mcpStartSequenceOnThread({ threadId: 'tj', followUps: [{ amount: 1, unit: 'days', message: 'Hi {firstName}' }] });
+  assert.strictEqual(pv.followUps[0].to, 'libu.kuriakose@jotun.ae');
+  assert.ok(pv.followUps[0].message.startsWith('Hi Libu'));
+  assert.ok(pv.warnings.some(w => /Libu K wrote .* nobody has answered/.test(w)), pv.warnings.join('|'));
+});
+
+test('default mode never follows up with only colleagues', () => {
+  const E = makeEnv();
+  E.mkThread('ti', 'Internal', [E.mkMessage({ from: ME, to: 'kashif.ahmed@procmart.com', date: Date.now() - 86400000 })]);
+  const pv = E.ctx.mcpStartSequenceOnThread({ threadId: 'ti', followUps: [{ amount: 1 }] });
+  assert.ok(pv.warnings.some(w => /nobody outside procmart\.com is in To.*will not be sent/.test(w)), pv.warnings.join('|'));
+  E.ctx.mcpStartSequenceOnThread({ threadId: 'ti', followUps: [{ amount: 1 }], confirm: true });
+  due(E, 'ti');
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 0);
+  assert.ok(!E.userProps.custom_ti);
+  assert.ok(/only go to colleagues/.test(JSON.parse(E.userProps.lastRunSummary).errors[0]));
+});
+
+test('reply_all: everyone on the latest message, colleagues in Cc', () => {
+  const E = jotunEnv();
+  const pv = E.ctx.mcpStartSequenceOnThread({ threadId: 'tj', replyMode: 'reply_all', followUps: [{ amount: 1 }] });
+  assert.strictEqual(pv.followUps[0].to, 'udeshini.edirisooriya@jotun.com');
+  assert.strictEqual(pv.followUps[0].cc, '"Kashif Ahmed" <kashif.ahmed@procmart.com>');
+});
+
+test('preview warns: weekend in the recipient country, past time, internal-only To', () => {
+  const E = jotunEnv();
+  // Fri 2030-01-04 is a weekend day in Saudi Arabia, not in the UAE.
+  const pv = E.ctx.mcpStartSequenceOnThread({ threadId: 'tj', replyMode: 'custom', to: ['a@acme.sa', 'b@acme.ae'],
+    followUps: [{ sendAtAbs: Date.parse('2030-01-04T10:00:00Z') }, { sendAtAbs: Date.parse('2020-01-01T10:00:00Z') },
+                { amount: 1, override: { to: ['kashif.ahmed@procmart.com'] } }] });
+  const w = pv.warnings.join('|');
+  assert.ok(/Follow-up 1 .*weekend for a@acme\.sa \(Fri–Sat\)/.test(w), w);
+  assert.ok(!/weekend for b@acme\.ae/.test(w), w);
+  assert.ok(/Follow-up 2 .*in the past/.test(w), w);
+  assert.ok(/Follow-up 3 would go To kashif\.ahmed@procmart\.com only/.test(w), w);
+});
+
+test('send now: first touch goes out on the next scheduler run', () => {
+  const E = jotunEnv();
+  const pv = E.ctx.mcpStartSequenceOnThread({ ...JOTUN, followUps: [{ sendNow: true, message: 'Now' }] });
+  assert.ok(/^Now: on the next scheduler run/.test(pv.followUps[0].when), pv.followUps[0].when);
+  E.ctx.mcpStartSequenceOnThread({ ...JOTUN, followUps: [{ sendNow: true, message: 'Now' }], confirm: true });
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 1);
+  assert.strictEqual(E.sent[0].headers.To, 'udeshini.edirisooriya@jotun.com, libu.kuriakose@jotun.ae');
+});
+
+test('save_sequence keeps cc/bcc/reply_mode; send_campaign takes cc lists; list shows recipients', () => {
+  const E = jotunEnv();
+  E.ctx.mcpSaveSequence({ name: 'Jotun', steps: [{ amount: 2, message: 'x' }], cc: ['ashutosh.dhar@procmart.com'],
+    replyMode: 'custom', stopOnReplyFrom: ['jotun.com'] });
+  const seq = E.ctx.mcpListSequences().find(s => s.name === 'Jotun');
+  assert.strictEqual(seq.cc, 'ashutosh.dhar@procmart.com'); assert.strictEqual(seq.replyMode, 'custom');
+  assert.deepStrictEqual([...seq.stopOnReplyFrom], ['jotun.com']);
+  assert.throws(() => E.ctx.mcpSaveSequence({ name: 'Bad', steps: [{ amount: 2 }], cc: ['nope'] }), /valid email/);
+  E.ctx.mcpStartSequenceOnThread({ threadId: 'tj', sequence: 'Jotun', to: ['udeshini.edirisooriya@jotun.com'], confirm: true });
+  const camp = E.ctx.mcpListCampaigns().find(c => c.threadId === 'tj');
+  assert.strictEqual(camp.followUps[0].to, 'udeshini.edirisooriya@jotun.com');
+  assert.strictEqual(camp.followUps[0].cc, 'ashutosh.dhar@procmart.com');
+  assert.strictEqual(E.ctx.mcpStatus().scheduled[0].followUps[0].to, 'udeshini.edirisooriya@jotun.com');
+
+  assert.throws(() => E.ctx.mcpSendCampaign({ recipients: 'a@acme.com', subject: 's', body: 'b', cc: ['bad@'] }), /valid email/);
+  const pv = E.ctx.mcpSendCampaign({ recipients: 'a@acme.com', subject: 's', body: 'b', cc: ['boss@procmart.com'],
+    followUps: [{ amount: 1, override: { bcc: ['me2@procmart.com'] } }] });
+  assert.strictEqual(pv.cc, 'boss@procmart.com');
+  assert.strictEqual(pv.followUps[0].cc, 'boss@procmart.com'); assert.strictEqual(pv.followUps[0].bcc, 'me2@procmart.com');
+});
+
+test('review fixes: "Last, First" names, free-mail aliases, subdomains, partial-run failure', () => {
+  // Quoted names with commas stay one address; a colleague-only To is caught.
+  let E = makeEnv();
+  E.mkThread('tc', 'Commas', [E.mkMessage({ from: ME, to: 'x@acme.com', date: Date.now() - 2e5 }),
+    E.mkMessage({ from: '"Sehgal, Ravi" <ravi@procmart.com>', to: ME, cc: '"Doe, Jane" <jane@acme.com>', date: Date.now() - 1e5 })]);
+  let pv = E.ctx.mcpStartSequenceOnThread({ threadId: 'tc', replyMode: 'reply_all', followUps: [{ amount: 1 }] });
+  assert.strictEqual(pv.followUps[0].to, '"Sehgal, Ravi" <ravi@procmart.com>');
+  assert.strictEqual(pv.followUps[0].cc, '"Doe, Jane" <jane@acme.com>');
+  assert.ok(pv.warnings.some(w => /nobody outside procmart\.com is in To/.test(w)), pv.warnings.join('|'));
+  assert.strictEqual(E.ctx.parseAddressList_('"Doe, Jane" <j@a.co>, b@c.co').length, 2);
+
+  // Own domain = the account's domain only; subdomains count as colleagues.
+  assert.deepStrictEqual([...E.ctx.myDomains_()], ['procmart.com']);
+  assert.ok(E.ctx.isOwnDomain_('ops@sg.procmart.com', []));
+  assert.ok(!E.ctx.isOwnDomain_('x@notprocmart.com', []));
+  E.actAs('abhi@yahoo.co.in');
+  assert.deepStrictEqual([...E.ctx.myDomains_()], []);
+  assert.ok(!E.ctx.isOwnDomain_('client@yahoo.co.in', ['abhi@yahoo.co.in']));
+
+  // wait 0 with at_time: no snapping; it is "now".
+  E = jotunEnv();
+  E.ctx.mcpStartSequenceOnThread({ ...JOTUN, followUps: [{ sendNow: true, atTime: '09:00', message: 'n' }], confirm: true });
+  assert.ok(JSON.parse(E.userProps.custom_tj).steps[0].sendAt <= Date.now());
+
+  // Step 1 sends, step 2's attachment holder is gone: step 1 is not re-sent.
+  E = jotunEnv();
+  E.ctx.mcpStartSequenceOnThread({ ...JOTUN, followUps: [{ sendNow: true, message: 'one' }, { sendNow: true, message: 'two' }], confirm: true });
+  const d = JSON.parse(E.userProps.custom_tj); d.steps[1].attachDraftId = 'missing'; E.userProps.custom_tj = JSON.stringify(d);
+  E.ctx.processFollowUps();
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.filter(x => x.text.startsWith('one')).length, 1);
+});
+
+test('sidebar one-click start uses the sequence\'s saved reply mode and stop list', () => {
+  const E = jotunEnv();
+  E.ctx.mcpSaveSequence({ name: 'RA', steps: [{ amount: 1 }], replyMode: 'reply_all', stopOnReplyFrom: ['jotun.com'] });
+  E.ctx.actionStartSequence({ parameters: { threadId: 'tj', name: 'RA' } });
+  const st = JSON.parse(E.userProps.custom_tj).steps[0];
+  assert.strictEqual(st.replyMode, 'reply_all'); assert.deepStrictEqual(st.stopOnReplyFrom, ['jotun.com']);
+  E.ctx.mcpSaveSequence({ name: 'C', steps: [{ amount: 1 }], replyMode: 'custom' });
+  delete E.userProps.custom_tj;
+  E.ctx.actionStartSequence({ parameters: { threadId: 'tj', name: 'C' } });
+  assert.ok(!E.userProps.custom_tj, 'custom needs recipients, so it is not started blind');
+});
+
+console.log('\n' + pass + ' passed');

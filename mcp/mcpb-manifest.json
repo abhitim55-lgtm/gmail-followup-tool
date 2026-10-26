@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "gmail-followup",
   "display_name": "Gmail Follow-ups",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Use the Gmail Follow-Up Tool from Claude: write and send campaigns with follow-ups and attachments, create sequences, start follow-ups on sent emails, and stop them. Everything previews first and waits for your yes.",
   "author": {
     "name": "Abhishek Sehgal"
@@ -29,7 +29,7 @@
     },
     {
       "name": "list_campaigns",
-      "description": "Threads with follow-ups scheduled"
+      "description": "Threads with follow-ups scheduled, and who each one goes to"
     },
     {
       "name": "delete_sequence",
@@ -45,7 +45,7 @@
     },
     {
       "name": "start_sequence_on_thread",
-      "description": "Schedule a sequence on a sent email (preview, then confirm)"
+      "description": "Schedule follow-ups on a sent email, to the people you choose (preview, then confirm)"
     },
     {
       "name": "send_campaign",

@@ -17,6 +17,26 @@ It runs on your computer and calls the same Apps Script project as the Gmail sid
 | `stop_campaign` | Cancel the follow-ups on one thread | Only after you confirm |
 | `sign_in` / `sign_out` | Connect or disconnect your Google account | No |
 
+### Who follow-ups go to
+
+`start_sequence_on_thread` takes a `reply_mode`:
+
+| reply_mode | Follow-ups go to |
+|---|---|
+| `last_sender` (default) | The last person **outside your company** who wrote on the thread. Colleagues on your own domain (e.g. procmart.com) are skipped, and a follow-up that would only reach colleagues is not sent. |
+| `reply_all` | Everyone on the latest message, minus you. Colleagues move from To to Cc. |
+| `custom` | Exactly the `to`, `cc` and `bcc` you give (required whenever you give any of them). Each item in `follow_ups` can carry its own `to`/`cc`/`bcc` that replaces the sequence-level list for that one email. |
+
+Every follow-up stays in the same Gmail thread: "Re: <original subject>", replying to the latest message on the thread when it sends.
+
+**What stops a sequence** ("if no reply" follow-ups): a new reply from someone in To/Cc outside your company (custom), or from anyone outside your company (the other modes). `stop_on_reply_from: ["jotun.com", "jotun.ae"]` narrows it to those domains or addresses. Your colleagues' replies never stop it unless you pass `stop_on_any_reply: true`.
+
+**Send now:** a follow-up with `send_at: "now"` (or `wait: 0`) goes out on the next scheduler run, within about 5 minutes, with the same recipient rules.
+
+`save_sequence` can save a default `cc`, `bcc`, `reply_mode` and `stop_on_reply_from`; `send_campaign` takes `cc`/`bcc` lists; `list_campaigns` and `status` show the To/Cc/Bcc of every scheduled follow-up.
+
+The preview lists To, Cc, Bcc, send time, condition and the full message of each follow-up, and warns when To has only colleagues, a send time falls on the recipient's weekend (Fri–Sat for Saudi, Qatar, Kuwait, Bahrain, Oman, Egypt, Jordan and similar; Sat–Sun elsewhere, from the domain's country code or else your timezone) or is in the past, or the client has written since your last email and nobody has answered.
+
 ### Checks before anything sends
 
 `send_campaign`, `start_sequence_on_thread` and `stop_campaign` always work in two steps:

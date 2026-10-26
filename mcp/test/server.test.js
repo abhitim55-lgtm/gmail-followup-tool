@@ -161,3 +161,38 @@ test('attachments: preview sends names only, confirm sends the files; missing fi
   const missing = await c.callTool({ name: 'send_campaign', arguments: { ...args, attachments: [path.join(dir, 'nope.pdf')] } });
   assert.ok(missing.isError && /not found/.test(bodyOf(missing)));
 });
+
+test('start_sequence_on_thread passes recipient control through; changing recipients needs a new preview', async () => {
+  const calls = [];
+  const c = await connect(async (fn, params = []) => { calls.push(params[0]); return params[0].confirm ? { scheduled: true, schedulerOk: true } : { preview: true }; });
+  const args = { thread_id: 'tj', reply_mode: 'custom',
+    to: ['udeshini.edirisooriya@jotun.com', 'libu.kuriakose@jotun.ae'],
+    cc: ['kashif.ahmed@procmart.com', 'ashutosh.dhar@procmart.com', 'abhishek@procmart.com'],
+    stop_on_reply_from: ['jotun.com', 'jotun.ae'],
+    follow_ups: [{ send_at: 'now', message: 'First' }, { wait: 0, message: 'Also now' }, { wait: 3, message: 'Last', cc: ['kashif.ahmed@procmart.com'] }] };
+  const pv = await c.callTool({ name: 'start_sequence_on_thread', arguments: args });
+  assert.ok(!pv.isError, bodyOf(pv));
+  const p = calls[0];
+  assert.strictEqual(p.replyMode, 'custom');
+  assert.deepStrictEqual(p.to, args.to); assert.deepStrictEqual(p.cc, args.cc);
+  assert.deepStrictEqual(p.stopOnReplyFrom, ['jotun.com', 'jotun.ae']);
+  assert.ok(p.followUps[0].sendNow && p.followUps[1].sendNow && !p.followUps[2].sendNow);
+  assert.deepStrictEqual(p.followUps[2].override, { cc: ['kashif.ahmed@procmart.com'] });
+  const moved = await c.callTool({ name: 'start_sequence_on_thread', arguments: { ...args, to: ['kashif.ahmed@procmart.com'], confirm: true, confirmation_code: codeOf(pv) } });
+  assert.ok(moved.isError && /changed/.test(bodyOf(moved)));
+  const ok = await c.callTool({ name: 'start_sequence_on_thread', arguments: { ...args, confirm: true, confirmation_code: codeOf(pv) } });
+  assert.ok(!ok.isError, bodyOf(ok));
+  assert.strictEqual(calls.at(-1).confirm, true);
+  assert.deepStrictEqual(calls.at(-1).to, args.to);
+});
+
+test('save_sequence takes default cc and reply_mode, refuses a per-follow-up to; send_campaign takes cc lists', async () => {
+  const calls = [];
+  const c = await connect(async (fn, params = []) => { calls.push([fn, params[0]]); return { preview: true }; });
+  await c.callTool({ name: 'save_sequence', arguments: { name: 'J', cc: ['a@procmart.com'], reply_mode: 'reply_all', stop_on_reply_from: ['jotun.com'], follow_ups: [{ wait: 2 }] } });
+  assert.deepStrictEqual([calls[0][1].cc, calls[0][1].replyMode, calls[0][1].stopOnReplyFrom], [['a@procmart.com'], 'reply_all', ['jotun.com']]);
+  const bad = await c.callTool({ name: 'save_sequence', arguments: { name: 'J', follow_ups: [{ wait: 2, to: ['x@y.co'] }] } });
+  assert.ok(bad.isError && /own to/.test(bodyOf(bad)));
+  await c.callTool({ name: 'send_campaign', arguments: { recipients: 'x@y.co', subject: 's', body: 'b', cc: ['a@b.co', 'c@d.co'] } });
+  assert.strictEqual(calls.at(-1)[1].cc, 'a@b.co, c@d.co');
+});

@@ -17,6 +17,10 @@ function mcpStatus() {
   h.displayName = getSenderDisplayName_();
   h.timezone = getPreferredTz_();
   h.signatureSet = !!getSignature_();
+  h.ownDomains = myDomains_();
+  h.scheduled = mcpListCampaigns().map(function (c) {
+    return { subject: c.subject, campaignName: c.campaignName, threadId: c.threadId, followUps: c.followUps };
+  });
   return h;
 }
 
@@ -33,10 +37,16 @@ function mcpSaveSequence(s) {
   if (name && name !== original && getSequence_(name) && !s.overwrite) {
     throw new Error('A sequence called "' + name + '" already exists. Use a different name, or pass overwrite: true to replace it.');
   }
-  const list = studioSaveSequence({
+  const seq = {
     name: name, originalName: original || (s.overwrite ? name : ''),
-    subject: s.subject || '', firstMessage: s.firstMessage || '', steps: mcpStashStepFiles_(s.steps)
-  });
+    subject: s.subject || '', firstMessage: s.firstMessage || '',
+    steps: mcpStashStepFiles_(mcpAdditiveStepRecipients_(s.steps, 'a saved sequence'))
+  };
+  if (s.cc !== undefined) seq.cc = mcpAddressList_(s.cc, 'cc').join(', ');
+  if (s.bcc !== undefined) seq.bcc = mcpAddressList_(s.bcc, 'bcc').join(', ');
+  if (s.replyMode !== undefined) seq.replyMode = mcpReplyMode_(s.replyMode);
+  if (s.stopOnReplyFrom !== undefined) seq.stopOnReplyFrom = mcpStopList_(s.stopOnReplyFrom);
+  const list = studioSaveSequence(seq);
   cleanupAttachmentHolders_(); // files of a replaced version
   return { saved: name, sequence: list.filter(function (x) { return x.name === name; })[0] || null };
 }
@@ -68,8 +78,24 @@ function mcpStashStepFiles_(steps) {
   });
 }
 
+// Each running campaign, with who every scheduled follow-up will go to (as
+// the thread stands now; reply_all and last_sender are worked out again when
+// each one sends).
 function mcpListCampaigns() {
-  return studioCampaigns_();
+  const myEmails = getMyEmails_();
+  return studioCampaigns_().map(function (c) {
+    let messages = [];
+    try { messages = threadMessages_(GmailApp.getThreadById(c.threadId)); } catch (e) {}
+    c.followUps = getQueueForThread_(c.threadId).map(function (s) {
+      const r = resolveStepRecipients_(messages, s, myEmails);
+      return {
+        when: formatLocal_(s.sendAt, s.tz), condition: conditionLabel_(s.condition),
+        replyMode: s.replyMode || (s.to ? 'custom' : 'last_sender'),
+        to: r.to, cc: r.cc, bcc: r.bcc
+      };
+    });
+    return c;
+  });
 }
 
 function mcpListSentThreads(query) {
@@ -81,7 +107,9 @@ function mcpListSentThreads(query) {
 // follow-ups are used instead.
 function mcpSendCampaign(p) {
   p = p || {};
-  const steps = mcpCampaignSteps_(p);
+  p.cc = mcpAddressList_(p.cc, 'cc').join(', ');
+  p.bcc = mcpAddressList_(p.bcc, 'bcc').join(', ');
+  const steps = mcpAdditiveStepRecipients_(mcpCampaignSteps_(p), 'send_campaign');
   if (!p.confirm) return mcpCampaignPreview_(p, steps);
   const res = studioSendCampaign({
     recipients: p.recipients, subject: p.subject, body: p.body, followUps: mcpStashStepFiles_(steps),
@@ -92,7 +120,10 @@ function mcpSendCampaign(p) {
   return res;
 }
 
-// p: { threadId, sequence, tz, confirm }
+// p: { threadId, sequence?, followUps?, tz, campaignName, confirm,
+//      to?, cc?, bcc?, replyMode?, stopOnReplyFrom?, stopOnAnyReply? }
+// followUps may carry override: { to?, cc?, bcc? } replacing the
+// sequence-level lists for that one email (custom mode).
 function mcpStartSequenceOnThread(p) {
   p = p || {};
   const name = String(p.sequence || '');
@@ -108,34 +139,106 @@ function mcpStartSequenceOnThread(p) {
     if (!steps.length) throw new Error('Give either a saved sequence name or the follow-ups to send.');
   }
   seq = seq || {};
+  const plan = mcpRecipientPlan_(p, steps, seq);
+  const custom = plan.mode === 'custom';
   const opts = {
-    threadId: p.threadId, followUps: steps, tz: p.tz, campaignName: name || String(p.campaignName || ''),
-    recipients: seq.recipients || '', cc: seq.cc || '', bcc: seq.bcc || ''
+    threadId: p.threadId, followUps: plan.steps, tz: p.tz, campaignName: name || String(p.campaignName || ''),
+    // custom mode carries final lists on each step; the others layer the
+    // sequence's cc/bcc on top of the thread's recipients, as before.
+    recipients: plan.mode === 'last_sender' ? (seq.recipients || '') : '',
+    cc: custom ? '' : (seq.cc || ''), bcc: custom ? '' : (seq.bcc || '')
   };
   if (p.confirm) {
     opts.followUps = mcpStashStepFiles_(opts.followUps);
     const res = studioScheduleOnThread(opts);
     return { scheduled: true, thread: res.thread, schedulerOk: res.schedulerOk };
   }
+  return mcpThreadPreview_(p, plan, opts);
+}
 
-  const thread = studioGetThread(p.threadId);
+function mcpThreadPreview_(p, plan, opts) {
+  const threadId = canonicalThreadId_(String(p.threadId || ''));
+  const t = threadId && GmailApp.getThreadById(threadId);
+  if (!t) throw new Error('That email thread could not be found.');
+  const thread = studioGetThread(threadId);
+  const messages = threadMessages_(t);
+  const myEmails = getMyEmails_();
+  const domains = myDomains_();
   const tz = mcpTz_(p.tz);
+  const steps = studioSteps_(opts.followUps, tz, true);
+  const timing = mcpScheduleLabels_(steps, tz, {});
   const warnings = [];
   if (CONFIG.dryRun) warnings.push('Test mode is on (CONFIG.dryRun): follow-ups will be logged, not sent.');
   if (schedulerTriggers_().length === 0) {
     warnings.push('Sending is switched off, so follow-ups won\'t go out. Open the sidebar or Studio to fix the scheduler first.');
   }
-  if (!thread.lastFromMe) {
-    warnings.push('The last message on this thread is from ' + thread.lastFrom + ', not you. Follow-ups set to "if no reply" will not send.');
-  }
   if (thread.queue.length) {
     warnings.push('This thread already has ' + thread.queue.length + ' follow-up(s) queued. These are added on top.');
   }
-  const vars = { firstName: recipientFirstName_(parseAddress_(thread.recipient).name) || 'there' };
+
+  // A client reply that nobody has answered yet.
+  let myLastIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) { if (isFromMe_(messages[i], myEmails)) { myLastIdx = i; break; } }
+  for (let i = messages.length - 1; i > myLastIdx; i--) {
+    const from = parseAddress_(messages[i].getFrom());
+    if (isOwnDomain_(from.email, myEmails)) continue;
+    warnings.push((from.name || from.email) + ' wrote on ' + formatLocal_(messages[i].getDate().getTime(), tz) +
+      ', after your last email, and nobody has answered yet. ' +
+      (plan.mode === 'last_sender' && !plan.stopOnReplyFrom.length
+        ? 'Follow-ups set to "if no reply" will not send.'
+        : 'That earlier reply does not stop these follow-ups; only new replies do.'));
+    break;
+  }
+
+  const rows = steps.map(function (s, i) {
+    const stored = {
+      to: s.exactRecipients ? s.to : (opts.recipients || ''),
+      cc: s.exactRecipients ? s.cc : mergeRecipients_(opts.cc, s.cc || ''),
+      bcc: s.exactRecipients ? s.bcc : mergeRecipients_(opts.bcc, s.bcc || ''),
+      replyMode: s.replyMode
+    };
+    const r = resolveStepRecipients_(messages, stored, myEmails);
+    const label = 'Follow-up ' + (i + 1);
+    const at = timing[i].at;
+    const toList = parseAddressList_(r.to);
+    const external = toList.filter(function (a) { return isValidEmail_(a.email) && !isOwnDomain_(a.email, myEmails); });
+    const everyone = toList.concat(parseAddressList_(r.cc), parseAddressList_(r.bcc));
+    if (!toList.length) {
+      warnings.push(label + ': nobody to send to could be worked out from this thread. Use reply_mode "custom" with to.');
+    } else if (!external.length && everyone.some(function (a) { return isOwnDomain_(a.email, myEmails); })) {
+      warnings.push(label + ' would go To ' + r.to + ' only: nobody outside ' + (domains.join(', ') || 'your account') +
+        ' is in To. ' + (s.exactRecipients ? 'Put the client in to.' : 'It will not be sent. Use reply_mode "custom" with the client in to.'));
+    }
+    if (!s.sendNow && at < Date.now()) warnings.push(label + ' is set for ' + formatLocal_(at, tz) + ', which is in the past. Pick a future time, or send_at: "now".');
+    const weekend = [];
+    external.forEach(function (a) {
+      const w = recipientWeekend_(a.email, tz);
+      if (w.days.indexOf(weekdayIn_(at, tz)) !== -1) weekend.push(a.email + ' (' + w.label + ')');
+    });
+    if (weekend.length) warnings.push(label + ' (' + formatLocal_(at, tz) + ') falls on the weekend for ' + weekend.join(', ') + '.');
+    const vars = { firstName: recipientFirstName_(r.name) || 'there' };
+    return {
+      when: timing[i].when,
+      to: r.to, cc: r.cc, bcc: r.bcc,
+      condition: timing[i].condition,
+      message: applySignatureToBody_(renderPlaceholders_(s.message || CONFIG.defaultTemplate, vars)),
+      attachments: timing[i].attachments
+    };
+  });
+
+  const stops = plan.stopOnReplyFrom.length
+    ? 'A new reply from ' + plan.stopOnReplyFrom.join(', ')
+    : plan.mode === 'custom' ? 'A new reply from anyone in To or Cc outside your company'
+      : 'A reply from anyone outside your company';
   return {
     preview: true,
-    thread: { threadId: thread.threadId, subject: thread.subject, recipient: thread.recipient, permalink: thread.permalink },
-    followUps: mcpScheduleLabels_(studioSteps_(steps, tz), tz, vars),
+    thread: { threadId: thread.threadId, subject: thread.subject, replySubject: /^Re:/i.test(thread.subject) ? thread.subject : 'Re: ' + thread.subject,
+              permalink: thread.permalink },
+    replyMode: plan.mode,
+    stopsWhen: stops + (plan.stopOnAnyReply ? ' (a colleague\'s reply also stops it)' : ' (colleagues on ' + (domains.join(', ') || 'your account') + ' never stop it)') +
+      ' stops the follow-ups marked "if no reply".',
+    timezone: tz,
+    followUps: rows,
     warnings: warnings
   };
 }
@@ -201,7 +304,12 @@ function mcpCampaignPreview_(p, rawSteps) {
       subject: renderPlaceholders_(d.subject, vars),
       body: applySignatureToBody_(renderPlaceholders_(d.body, vars))
     },
-    followUps: mcpScheduleLabels_(steps, tz, vars),
+    // Each person's follow-ups reply on their own thread, to them.
+    followUps: mcpScheduleLabels_(steps, tz, vars).map(function (row, i) {
+      return { when: row.when, to: 'each recipient (' + formatAddress_(first) + ' shown)',
+        cc: mergeRecipients_(String(p.cc || ''), steps[i].cc || ''), bcc: mergeRecipients_(String(p.bcc || ''), steps[i].bcc || ''),
+        condition: row.condition, message: row.message, attachments: row.attachments };
+    }),
     attachments: (p.attachmentNames || []).map(String),
     timezone: tz,
     warnings: ncWarnings_(d, recips, steps)
@@ -211,7 +319,17 @@ function mcpCampaignPreview_(p, rawSteps) {
 // When each step would go out if started now, plus its rendered message.
 function mcpScheduleLabels_(steps, tz, vars) {
   let prev = Date.now();
-  return steps.map(function (s) {
+  return steps.map(function (s, i) {
+    if (s.sendNow) {
+      return {
+        at: prev,
+        when: i === 0 ? 'Now: on the next scheduler run (within about ' + normalizeInterval_(CONFIG.triggerIntervalMinutes) + ' min, ' + formatLocal_(prev, tz) + ')'
+          : 'Right after follow-up ' + i + ', on the same or next scheduler run',
+        condition: conditionLabel_(s.condition),
+        message: renderPlaceholders_(s.message || CONFIG.defaultTemplate, vars),
+        attachments: (s.attachNames && s.attachNames.length) ? s.attachNames : (s.attachments || []).map(function (f) { return f.name; })
+      };
+    }
     if (s.sendAtAbs > 0) {
       const wall = Utilities.formatDate(new Date(s.sendAtAbs), 'UTC', 'yyyy-MM-dd HH:mm');
       prev = Utilities.parseDate(wall, tz, 'yyyy-MM-dd HH:mm').getTime();
@@ -219,6 +337,7 @@ function mcpScheduleLabels_(steps, tz, vars) {
       prev = computeStepSendAt_(prev, s.amount, s.unit, s.atTime, tz);
     }
     return {
+      at: prev,
       when: 'About ' + formatLocal_(prev, tz),
       condition: conditionLabel_(s.condition),
       message: renderPlaceholders_(s.message || CONFIG.defaultTemplate, vars),
@@ -231,4 +350,102 @@ function mcpScheduleLabels_(steps, tz, vars) {
 // Like studioTz_, but a preview never changes the saved timezone.
 function mcpTz_(tz) {
   return TIMEZONE_CHOICES.some(function (c) { return c.value === tz; }) ? tz : getPreferredTz_();
+}
+
+
+// ───────── Recipient control ─────────────────────────────────────
+
+const REPLY_MODES = ['last_sender', 'reply_all', 'custom'];
+
+function mcpReplyMode_(m) {
+  const mode = String(m || 'last_sender');
+  if (REPLY_MODES.indexOf(mode) === -1) throw new Error('reply_mode must be one of: ' + REPLY_MODES.join(', ') + '.');
+  return mode;
+}
+
+// Addresses from an array or a comma/semicolon/newline separated string, each
+// bare or "Name <email>". Throws naming any that aren't valid.
+function mcpAddressList_(value, field) {
+  if (value === undefined || value === null) return [];
+  const items = Array.isArray(value) ? value : String(value).split(/[;\n]|,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+  const out = [], bad = [], seen = {};
+  items.forEach(function (raw) {
+    const s = String(raw || '').trim();
+    if (!s) return;
+    const a = parseAddress_(s);
+    if (!isValidEmail_(a.email)) { bad.push(s); return; }
+    const k = a.email.toLowerCase();
+    if (seen[k]) return;
+    seen[k] = true;
+    out.push(formatAddress_({ name: a.name.replace(/^"|"$/g, ''), email: a.email }));
+  });
+  if (bad.length) throw new Error('Not a valid email address in ' + field + ': ' + bad.join(', '));
+  return out;
+}
+
+// stop_on_reply_from: domains ("jotun.com") or addresses.
+function mcpStopList_(value) {
+  const items = Array.isArray(value) ? value : (value ? String(value).split(/[,;\s]+/) : []);
+  return items.map(function (x) { return String(x || '').trim().toLowerCase().replace(/^@/, ''); })
+    .filter(String)
+    .map(function (x) {
+      if (x.indexOf('@') !== -1 ? !isValidEmail_(x) : !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(x)) {
+        throw new Error('stop_on_reply_from: "' + x + '" is not a domain (like jotun.com) or an email address.');
+      }
+      return x;
+    });
+}
+
+const has_ = function (o, k) { return !!o && o[k] !== undefined && o[k] !== null; };
+
+// Works out reply mode, stop rules and, in custom mode, each step's final
+// To/Cc/Bcc. Returns { mode, stopOnReplyFrom, stopOnAnyReply, steps }.
+function mcpRecipientPlan_(p, steps, seq) {
+  const mode = mcpReplyMode_(p.replyMode || seq.replyMode);
+  const callSet = ['to', 'cc', 'bcc'].some(function (k) { return has_(p, k); }) ||
+    steps.some(function (s) { return ['to', 'cc', 'bcc'].some(function (k) { return has_(s.override, k); }); });
+  if (callSet && mode !== 'custom') {
+    throw new Error('to, cc and bcc need reply_mode: "custom". Add it, or leave them out to reply to ' +
+      (mode === 'reply_all' ? 'everyone on the latest message.' : 'the last person outside your company who wrote.'));
+  }
+  const stopOn = mcpStopList_(has_(p, 'stopOnReplyFrom') ? p.stopOnReplyFrom : seq.stopOnReplyFrom);
+  const anyReply = !!p.stopOnAnyReply;
+  const baseTo = mcpAddressList_(p.to, 'to');
+  const baseCc = has_(p, 'cc') ? mcpAddressList_(p.cc, 'cc') : mcpAddressList_(seq.cc || '', 'the sequence\'s cc');
+  const baseBcc = has_(p, 'bcc') ? mcpAddressList_(p.bcc, 'bcc') : mcpAddressList_(seq.bcc || '', 'the sequence\'s bcc');
+  const out = steps.map(function (s, i) {
+    const o = s.override || {};
+    const step = {};
+    Object.keys(s).forEach(function (k) { if (k !== 'override') step[k] = s[k]; });
+    step.replyMode = mode;
+    step.stopOnReplyFrom = stopOn;
+    if (anyReply) step.stopOnAnyReply = true;
+    if (mode === 'custom') {
+      const n = 'follow-up ' + (i + 1);
+      const to = has_(o, 'to') ? mcpAddressList_(o.to, n + ' to') : baseTo;
+      if (!to.length) throw new Error('reply_mode "custom" needs at least one address in to' + (has_(o, 'to') ? ' (' + n + ' has an empty to).' : '.'));
+      const cc = has_(o, 'cc') ? mcpAddressList_(o.cc, n + ' cc') : mcpAddressList_(mergeRecipients_(baseCc.join(', '), s.cc || ''), n + ' cc');
+      const bcc = has_(o, 'bcc') ? mcpAddressList_(o.bcc, n + ' bcc') : mcpAddressList_(mergeRecipients_(baseBcc.join(', '), s.bcc || ''), n + ' bcc');
+      step.exactRecipients = true;
+      step.to = to.join(', ');
+      step.cc = cc.join(', ');
+      step.bcc = bcc.join(', ');
+    }
+    return step;
+  });
+  return { mode: mode, stopOnReplyFrom: stopOn, stopOnAnyReply: anyReply, steps: out };
+}
+
+// Per-step cc/bcc from the MCP (override lists) become the usual step cc/bcc
+// strings, added to the campaign's. A per-step to makes no sense here.
+function mcpAdditiveStepRecipients_(steps, where) {
+  return (steps || []).map(function (s, i) {
+    const o = s.override || {};
+    if (has_(o, 'to')) throw new Error('Follow-up ' + (i + 1) + ': a per-follow-up "to" only works in start_sequence_on_thread, not ' + where + '.');
+    const step = {};
+    Object.keys(s).forEach(function (k) { if (k !== 'override') step[k] = s[k]; });
+    if (has_(o, 'cc')) step.cc = mergeRecipients_(s.cc || '', mcpAddressList_(o.cc, 'follow-up ' + (i + 1) + ' cc').join(', '));
+    if (has_(o, 'bcc')) step.bcc = mergeRecipients_(s.bcc || '', mcpAddressList_(o.bcc, 'follow-up ' + (i + 1) + ' bcc').join(', '));
+    return step;
+  });
 }
