@@ -211,6 +211,13 @@ function processFollowUps() {
     return;
   }
 
+  const pauseAll = pauseState_();
+  if (pauseAll.paused) {
+    Logger.log('All follow-ups are paused' + (pauseAll.until ? ' until ' + formatLocal_(pauseAll.until) : '') + ' — skipping run.');
+    recordRun_('Paused — nothing sent.', 0, []);
+    return;
+  }
+
   const myEmails = getMyEmails_();
   const cutoff = new Date(Date.now() - CONFIG.lookbackDays * 86400000);
   let sent = 0;
@@ -245,6 +252,15 @@ function processFollowUps() {
           continue;
         }
         data.steps.sort(function (a, b) { return a.sendAt - b.sendAt; });
+        if (data.paused) {
+          if (data.pausedUntil && data.pausedUntil <= Date.now()) {
+            delete data.paused; delete data.pausedUntil;
+            props.setProperty(key, JSON.stringify(data));
+          } else {
+            Logger.log('Custom: paused' + (data.pausedUntil ? ' until ' + formatLocal_(data.pausedUntil) : '') + ' — skipping.');
+            continue;
+          }
+        }
         const firstStepIn = data.steps[0].sendAt - Date.now();
         Logger.log('Custom: ' + data.steps.length + ' step(s), first fires in ' + Math.round(firstStepIn / 1000) + 's.');
         if (firstStepIn > 0) continue;
@@ -2851,6 +2867,73 @@ function actionRemoveStep(e) {
 
 // Drop one queued step (index into the time-sorted queue). Clears the label
 // when nothing is left. Returns an error message, or '' on success.
+// ───────── Pause ───────────────────────────────────────────────────
+//
+// Pausing everything is one user property; pausing one thread is a flag on
+// its schedule. Both take an optional "until" (ms) after which they lift by
+// themselves. While paused nothing sends; steps that came due meanwhile go
+// out on the first run after resuming.
+
+const PAUSE_ALL_KEY = 'pauseAll';
+
+function pauseState_() {
+  let p = null;
+  try { p = JSON.parse(PropertiesService.getUserProperties().getProperty(PAUSE_ALL_KEY) || 'null'); } catch (e) {}
+  if (!p) return { paused: false };
+  if (p.until && p.until <= Date.now()) {
+    PropertiesService.getUserProperties().deleteProperty(PAUSE_ALL_KEY);
+    return { paused: false };
+  }
+  return { paused: true, until: p.until || 0 };
+}
+
+function setPauseAll_(paused, until) {
+  const props = PropertiesService.getUserProperties();
+  if (paused) props.setProperty(PAUSE_ALL_KEY, JSON.stringify({ at: Date.now(), until: until || 0 }));
+  else props.deleteProperty(PAUSE_ALL_KEY);
+}
+
+// Returns false when nothing is scheduled on the thread.
+function setThreadPaused_(threadId, paused, until) {
+  const props = PropertiesService.getUserProperties();
+  const key = 'custom_' + threadId;
+  const raw = props.getProperty(key);
+  if (!raw) return false;
+  const data = JSON.parse(raw);
+  if (paused) { data.paused = true; if (until) data.pausedUntil = until; else delete data.pausedUntil; }
+  else { delete data.paused; delete data.pausedUntil; }
+  props.setProperty(key, JSON.stringify(data));
+  return true;
+}
+
+function isThreadPaused_(threadId) {
+  try {
+    const d = JSON.parse(PropertiesService.getUserProperties().getProperty('custom_' + threadId) || '{}');
+    if (!d.paused) return false;
+    return !(d.pausedUntil && d.pausedUntil <= Date.now());
+  } catch (e) { return false; }
+}
+
+// Change one queued step (index into the sendAt-sorted queue). changes:
+// { message?, sendAt? (ms), condition? }. Returns '' or an error message.
+function editQueuedStep_(threadId, index, changes) {
+  const props = PropertiesService.getUserProperties();
+  const key = 'custom_' + threadId;
+  const raw = props.getProperty(key);
+  if (!raw) return 'Nothing scheduled.';
+  const data = JSON.parse(raw);
+  if (!data.steps) return 'Nothing scheduled.';
+  data.steps.sort(function (a, b) { return a.sendAt - b.sendAt; });
+  if (isNaN(index) || index < 0 || index >= data.steps.length) return 'Step not found.';
+  const s = data.steps[index];
+  if (typeof changes.message === 'string') s.message = changes.message;
+  if (changes.sendAt) s.sendAt = changes.sendAt;
+  if (changes.condition) s.condition = changes.condition;
+  data.steps.sort(function (a, b) { return a.sendAt - b.sendAt; });
+  props.setProperty(key, JSON.stringify(data));
+  return '';
+}
+
 function removeQueuedStep_(threadId, index) {
   const props = PropertiesService.getUserProperties();
   const key = 'custom_' + threadId;

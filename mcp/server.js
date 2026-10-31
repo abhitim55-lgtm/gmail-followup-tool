@@ -128,6 +128,7 @@ const INSTRUCTIONS = [
   'One request can do everything: when the user describes who to email, what to say and what follow-ups to send, build it with the tools here. Use send_campaign with follow_ups written inline (no need to save a sequence first), or save_sequence first if they want to reuse it.',
   'For an email they already sent, find it with list_sent_threads, then start_sequence_on_thread with a saved sequence or inline follow_ups.',
   'Who follow-ups go to: by default the last person outside the user\'s company who wrote on the thread (colleagues are never followed up with). In multi-party threads, ask or check who the client is and use reply_mode "custom" with to/cc (and stop_on_reply_from with the client\'s domains), or reply_mode "reply_all". Replies from the user\'s own colleagues never stop a sequence unless stop_on_any_reply is true.',
+  'To manage what is running: list_campaigns shows every scheduled follow-up with a step number. stop_campaign stops a thread, a whole campaign, one person or everything; cancel_follow_up drops one step; edit_follow_up changes a step\'s text, time or condition; pause_follow_ups / resume_follow_ups hold and release without cancelling.',
   'Anything that sends, schedules, stops or deletes returns a preview first. Show the preview, including every warning, and ask the user. Only after a clear yes, call again with confirm: true and the confirmation_code.',
   'Attachments: give full file paths on this computer. The first email takes attachments in send_campaign; any follow-up (inline or in save_sequence) takes its own. 15 MB total per request. A follow-up\'s files are kept in a Gmail draft titled "[Follow-ups] attachment holder" until they are sent; tell the user not to delete it.',
   'Do not look for or edit this tool\'s files on disk; everything goes through these tools. If a tool says the user is not signed in, use sign_in.'
@@ -338,23 +339,86 @@ export function buildServer({ run = appsScript.run } = {}) {
     return json('Deleted.', await run('mcpDeleteSequence', [args.name, true]));
   });
 
-  tool('stop_campaign', {
-    title: 'Stop follow-ups on a thread',
-    description: 'Cancel every scheduled follow-up on one thread. First call (no confirm) shows what would be cancelled. After the user approves, call again with confirm: true and the confirmation_code.',
-    inputSchema: {
-      thread_id: z.string().describe('threadId from list_campaigns.'),
-      confirm: z.boolean().optional(),
-      confirmation_code: z.string().optional()
-    }
-  }, async (args) => {
+  // Which follow-ups a stop/pause/resume applies to: exactly one of these.
+  const selector = {
+    thread_id: z.string().optional().describe('One email thread (threadId from list_campaigns).'),
+    campaign_name: z.string().optional().describe('Every thread in a campaign, by its name as list_campaigns shows it.'),
+    recipient: z.string().optional().describe('Every thread whose follow-ups go to this email address.'),
+    all: z.boolean().optional().describe('Everything that is scheduled.')
+  };
+  const toSel = (a) => {
+    const picked = ['thread_id', 'campaign_name', 'recipient', 'all'].filter((k) => a[k]);
+    if (picked.length !== 1) throw new Error('Give exactly one of thread_id, campaign_name, recipient or all.');
+    return { threadId: a.thread_id || '', campaignName: a.campaign_name || '', recipient: a.recipient || '', all: !!a.all };
+  };
+  // Preview first, then the confirmed call. fn(confirm) runs on Apps Script.
+  const gated = (kind, args, fn, doneMsg) => (async () => {
     if (!args.confirm) {
-      const pv = await run('mcpStopCampaign', [args.thread_id, false]);
-      const code = gate.issue('stop', args);
+      const pv = await fn(false);
+      const code = gate.issue(kind, args);
       return json(PREVIEW_NOTE + '"' + code + '".', { ...pv, confirmation_code: code });
     }
-    const why = gate.check('stop', args);
+    const why = gate.check(kind, args);
     if (why) return { isError: true, content: [{ type: 'text', text: why }] };
-    return json('Stopped. No more follow-ups will go out on this thread.', await run('mcpStopCampaign', [args.thread_id, true]));
+    return json(doneMsg, await fn(true));
+  })();
+  const confirmArgs = { confirm: z.boolean().optional(), confirmation_code: z.string().optional() };
+  const toAbs = (t) => {
+    if (!t) return 0;
+    const m = /^(\d{4}-\d{2}-\d{2}) (\d{1,2}:\d{2})$/.exec(t);
+    if (!m) throw new Error('Use "YYYY-MM-DD HH:MM" for times.');
+    return Date.parse(m[1] + 'T' + m[2].padStart(5, '0') + ':00Z');
+  };
+
+  tool('stop_campaign', {
+    title: 'Stop follow-ups',
+    description: 'Cancel every scheduled follow-up on one thread, a whole campaign (all its recipients), everything going to one person, or everything. First call shows exactly what would be cancelled; after the user approves, call again with confirm: true and the confirmation_code.',
+    inputSchema: { ...selector, ...confirmArgs }
+  }, async (args) => {
+    const sel = toSel(args);
+    return gated('stop', args, (c) => run('mcpStopCampaign', [sel, c]), 'Stopped. No more follow-ups will go out on these threads.');
+  });
+
+  tool('cancel_follow_up', {
+    title: 'Cancel one follow-up',
+    description: 'Cancel a single scheduled follow-up on a thread and keep the others. step is the number shown by list_campaigns. Preview first, then confirm.',
+    inputSchema: { thread_id: z.string(), step: z.number().int().positive(), ...confirmArgs }
+  }, async (args) => gated('cancel1', args, (c) => run('mcpCancelFollowUp', [args.thread_id, args.step, c]), 'Cancelled that follow-up.'));
+
+  tool('edit_follow_up', {
+    title: 'Edit a scheduled follow-up',
+    description: 'Change one scheduled follow-up: its message, when it sends, or its condition. step is the number shown by list_campaigns. Preview shows before and after; then confirm.',
+    inputSchema: {
+      thread_id: z.string(),
+      step: z.number().int().positive(),
+      message: z.string().optional().describe('New text. Placeholders: {firstName}, {senderFirstName}.'),
+      send_at: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{1,2}:\d{2}$/).optional().describe('New send time, "YYYY-MM-DD HH:MM" in the user\'s timezone.'),
+      condition: z.enum(['no_reply', 'replied', 'always']).optional(),
+      timezone: z.string().optional(),
+      ...confirmArgs
+    }
+  }, async (args) => {
+    const p = { threadId: args.thread_id, step: args.step, message: args.message || '', sendAtAbs: toAbs(args.send_at),
+                condition: args.condition || '', tz: args.timezone || '' };
+    return gated('edit', args, (c) => run('mcpEditFollowUp', [p, c]), 'Updated.');
+  });
+
+  tool('pause_follow_ups', {
+    title: 'Pause follow-ups',
+    description: 'Hold follow-ups without cancelling them: one thread, a campaign, everything to one person, or all (which also holds anything started later). Optional until "YYYY-MM-DD HH:MM" resumes by itself. Follow-ups that come due while paused go out on the first run after resuming. Preview, then confirm.',
+    inputSchema: { ...selector, until: z.string().optional().describe('Resume automatically at this time, "YYYY-MM-DD HH:MM".'), ...confirmArgs }
+  }, async (args) => {
+    const sel = toSel(args);
+    return gated('pause', args, (c) => run('mcpPause', [sel, true, toAbs(args.until), c]), 'Paused.');
+  });
+
+  tool('resume_follow_ups', {
+    title: 'Resume follow-ups',
+    description: 'Undo a pause for one thread, a campaign, one person, or all. Follow-ups that came due while paused go out within a few minutes. Preview, then confirm.',
+    inputSchema: { ...selector, ...confirmArgs }
+  }, async (args) => {
+    const sel = toSel(args);
+    return gated('resume', args, (c) => run('mcpPause', [sel, false, 0, c]), 'Resumed.');
   });
 
   return server;

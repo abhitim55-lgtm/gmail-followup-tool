@@ -441,12 +441,12 @@ test('MCP API: sequence on a thread and stop both need confirm', () => {
   const pv = E.ctx.mcpStartSequenceOnThread({ threadId: 'th', sequence: 'S' });
   assert.ok(pv.preview && !E.userProps.custom_th);
   assert.strictEqual(pv.followUps[0].message, 'Hi Pat');
-  assert.throws(() => E.ctx.mcpStopCampaign('th'), /Nothing is scheduled/);
+  assert.throws(() => E.ctx.mcpStopCampaign('th'), /No scheduled follow-ups match/);
   const ok = E.ctx.mcpStartSequenceOnThread({ threadId: 'th', sequence: 'S', confirm: true });
   assert.ok(ok.scheduled && E.userProps.custom_th);
   assert.strictEqual(JSON.parse(E.userProps.custom_th).campaignName, 'S');
   const stopPv = E.ctx.mcpStopCampaign('th');
-  assert.ok(stopPv.preview && stopPv.cancels.length === 1 && E.userProps.custom_th);
+  assert.ok(stopPv.preview && stopPv.threads[0].followUps.length === 1 && stopPv.followUpsCancelled === 1 && E.userProps.custom_th);
   const stopped = E.ctx.mcpStopCampaign('th', true);
   assert.ok(stopped.stopped && !E.userProps.custom_th && !E.threads.th.labels.has('FU/Custom'));
   assert.strictEqual(E.sent.length, 0);

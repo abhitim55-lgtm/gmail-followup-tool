@@ -18,6 +18,9 @@ function mcpStatus() {
   h.timezone = getPreferredTz_();
   h.signatureSet = !!getSignature_();
   h.ownDomains = myDomains_();
+  const pa = pauseState_();
+  h.pausedAll = pa.paused;
+  if (pa.until) h.pausedUntil = formatLocal_(pa.until, h.timezone);
   h.scheduled = mcpListCampaigns().map(function (c) {
     return { subject: c.subject, campaignName: c.campaignName, threadId: c.threadId, followUps: c.followUps };
   });
@@ -86,9 +89,13 @@ function mcpListCampaigns() {
   return studioCampaigns_().map(function (c) {
     let messages = [];
     try { messages = threadMessages_(GmailApp.getThreadById(c.threadId)); } catch (e) {}
-    c.followUps = getQueueForThread_(c.threadId).map(function (s) {
+    c.paused = isThreadPaused_(c.threadId);
+    c.followUps = getQueueForThread_(c.threadId).map(function (s, i) {
       const r = resolveStepRecipients_(messages, s, myEmails);
       return {
+        step: i + 1,
+        message: String(s.message || CONFIG.defaultTemplate).replace(/\s+/g, ' ').substring(0, 160),
+        attachments: s.attachNames || [],
         when: formatLocal_(s.sendAt, s.tz), condition: conditionLabel_(s.condition),
         replyMode: s.replyMode || (s.to ? 'custom' : 'last_sender'),
         to: r.to, cc: r.cc, bcc: r.bcc
@@ -243,27 +250,140 @@ function mcpThreadPreview_(p, plan, opts) {
   };
 }
 
-// Without confirm: what stopping would cancel. With confirm: stop it.
-function mcpStopCampaign(threadId, confirm) {
-  const id = String(threadId || '');
-  const queue = id ? getQueueForThread_(id) : [];
-  if (!queue.length) throw new Error('Nothing is scheduled on that thread. Use list_campaigns to see what is running.');
+// Which threads a stop/pause/resume applies to.
+// sel: { threadId? | campaignName? | recipient? | all? }
+function mcpSelectThreads_(sel) {
+  sel = sel || {};
+  const all = studioCampaigns_();
+  let out;
+  if (sel.threadId) out = all.filter(function (c) { return c.threadId === String(sel.threadId); });
+  else if (sel.campaignName) {
+    const n = String(sel.campaignName).trim().toLowerCase();
+    out = all.filter(function (c) { return String(c.campaignName || c.subject || '').trim().toLowerCase() === n; });
+  } else if (sel.recipient) {
+    const e = String(sel.recipient).trim().toLowerCase();
+    out = all.filter(function (c) {
+      if (String(c.recipient || '').toLowerCase().indexOf(e) !== -1) return true;
+      return getQueueForThread_(c.threadId).some(function (st) {
+        return [st.to, st.cc].join(',').toLowerCase().indexOf(e) !== -1;
+      });
+    });
+  } else if (sel.all) out = all;
+  else throw new Error('Say which follow-ups: thread_id, campaign_name, recipient, or all.');
+  if (!out.length) throw new Error('No scheduled follow-ups match that. Use list_campaigns to see what is running.');
+  return out;
+}
+
+function mcpThreadSummary_(c) {
+  return {
+    threadId: c.threadId, campaignName: c.campaignName || '', subject: c.subject || '', recipient: c.recipient || '',
+    paused: isThreadPaused_(c.threadId),
+    followUps: getQueueForThread_(c.threadId).map(function (s, i) {
+      return { step: i + 1, when: formatLocal_(s.sendAt, s.tz), condition: conditionLabel_(s.condition),
+               message: String(s.message || CONFIG.defaultTemplate).replace(/\s+/g, ' ').substring(0, 160) };
+    })
+  };
+}
+
+// Stop every follow-up on the selected threads. Without confirm: preview.
+// Kept callable as mcpStopCampaign(threadId, confirm) for older servers.
+function mcpStopCampaign(sel, confirm) {
+  if (typeof sel === 'string') sel = { threadId: sel };
+  const threads = mcpSelectThreads_(sel);
   if (!confirm) {
-    const c = studioCampaigns_().filter(function (x) { return x.threadId === id; })[0] || {};
-    return {
-      preview: true,
-      threadId: id,
-      campaignName: c.campaignName || '',
-      subject: c.subject || '',
-      recipient: c.recipient || '',
-      cancels: queue.map(function (s) {
-        return { when: formatLocal_(s.sendAt, s.tz), condition: conditionLabel_(s.condition),
-                 message: String(s.message || CONFIG.defaultTemplate).replace(/\s+/g, ' ').substring(0, 200) };
-      })
-    };
+    return { preview: true, threads: threads.map(mcpThreadSummary_),
+             followUpsCancelled: threads.reduce(function (n, c) { return n + c.stepCount; }, 0) };
   }
-  studioCancelCampaign(id);
-  return { stopped: true, threadId: id, cancelled: queue.length };
+  let n = 0;
+  threads.forEach(function (c) { n += c.stepCount; studioCancelCampaign(c.threadId); });
+  cleanupAttachmentHolders_();
+  return { stopped: threads.length, cancelled: n, threadIds: threads.map(function (c) { return c.threadId; }) };
+}
+
+// Cancel one follow-up. step is 1-based, as list_campaigns shows it.
+function mcpCancelFollowUp(threadId, step, confirm) {
+  const id = String(threadId || '');
+  const queue = getQueueForThread_(id);
+  const i = parseInt(step, 10) - 1;
+  if (!queue.length) throw new Error('Nothing is scheduled on that thread. Use list_campaigns.');
+  if (isNaN(i) || i < 0 || i >= queue.length) throw new Error('That thread has follow-ups 1 to ' + queue.length + '.');
+  const c = mcpThreadSummary_({ threadId: id, campaignName: '', subject: '', recipient: '' });
+  if (!confirm) {
+    const meta = studioCampaigns_().filter(function (x) { return x.threadId === id; })[0] || {};
+    return { preview: true, subject: meta.subject || '', recipient: meta.recipient || '', cancels: c.followUps[i],
+             remaining: c.followUps.length - 1 };
+  }
+  const err = removeQueuedStep_(id, i);
+  if (err) throw new Error(err);
+  cleanupAttachmentHolders_();
+  return { cancelled: c.followUps[i], remaining: queue.length - 1 };
+}
+
+// Change one follow-up's message, send time or condition.
+// p: { threadId, step (1-based), message?, sendAtAbs? (wall clock as UTC ms), condition?, tz? }
+function mcpEditFollowUp(p, confirm) {
+  p = p || {};
+  const id = String(p.threadId || '');
+  const queue = getQueueForThread_(id);
+  const i = parseInt(p.step, 10) - 1;
+  if (!queue.length) throw new Error('Nothing is scheduled on that thread. Use list_campaigns.');
+  if (isNaN(i) || i < 0 || i >= queue.length) throw new Error('That thread has follow-ups 1 to ' + queue.length + '.');
+  const cur = queue[i];
+  const tz = mcpTz_(p.tz || cur.tz);
+  const changes = {};
+  if (typeof p.message === 'string' && p.message.trim()) changes.message = p.message;
+  if (p.condition) changes.condition = p.condition;
+  if (p.sendAtAbs) {
+    const wall = Utilities.formatDate(new Date(p.sendAtAbs), 'UTC', 'yyyy-MM-dd HH:mm');
+    const ms = Utilities.parseDate(wall, tz, 'yyyy-MM-dd HH:mm').getTime();
+    if (ms <= Date.now()) throw new Error('Pick a time in the future.');
+    changes.sendAt = ms;
+  }
+  if (!Object.keys(changes).length) throw new Error('Nothing to change: give a new message, send time or condition.');
+  const before = { when: formatLocal_(cur.sendAt, cur.tz || tz), condition: conditionLabel_(cur.condition),
+                   message: cur.message || CONFIG.defaultTemplate };
+  const after = { when: changes.sendAt ? formatLocal_(changes.sendAt, tz) : before.when,
+                  condition: changes.condition ? conditionLabel_(changes.condition) : before.condition,
+                  message: changes.message || before.message };
+  if (!confirm) return { preview: true, threadId: id, step: i + 1, before: before, after: after };
+  const err = editQueuedStep_(id, i, changes);
+  if (err) throw new Error(err);
+  return { edited: true, threadId: id, now: after };
+}
+
+// Pause or resume. sel: { threadId? | campaignName? | recipient? | all? }, until: ms or 0.
+// Pausing "all" holds every follow-up, including ones started later.
+function mcpPause(sel, paused, untilAbs, confirm) {
+  sel = sel || {};
+  const tz = getPreferredTz_();
+  let until = 0;
+  if (untilAbs) {
+    const wall = Utilities.formatDate(new Date(untilAbs), 'UTC', 'yyyy-MM-dd HH:mm');
+    until = Utilities.parseDate(wall, tz, 'yyyy-MM-dd HH:mm').getTime();
+    if (until <= Date.now()) throw new Error('Pick a resume time in the future.');
+  }
+  if (sel.all) {
+    const pa = pauseState_();
+    const count = studioCampaigns_().length;
+    if (!confirm) {
+      return { preview: true, scope: 'all', action: paused ? 'pause' : 'resume', threads: count,
+               currentlyPaused: pa.paused, until: until ? formatLocal_(until, tz) : '',
+               note: paused ? 'Nothing will send until you resume' + (until ? ' (or until ' + formatLocal_(until, tz) + ')' : '') +
+                 '. Follow-ups that come due meanwhile go out on the first run after resuming.'
+                 : 'Follow-ups that came due while paused go out within a few minutes.' };
+    }
+    setPauseAll_(paused, until);
+    return { done: true, scope: 'all', paused: paused, until: until ? formatLocal_(until, tz) : '' };
+  }
+  const threads = mcpSelectThreads_(sel);
+  if (!confirm) {
+    return { preview: true, action: paused ? 'pause' : 'resume', until: until ? formatLocal_(until, tz) : '',
+             threads: threads.map(mcpThreadSummary_),
+             note: paused ? 'These follow-ups hold until you resume. Ones that come due meanwhile go out after resuming.'
+                          : 'Follow-ups that came due while paused go out within a few minutes.' };
+  }
+  threads.forEach(function (c) { setThreadPaused_(c.threadId, paused, until); });
+  return { done: true, paused: paused, threads: threads.length };
 }
 
 

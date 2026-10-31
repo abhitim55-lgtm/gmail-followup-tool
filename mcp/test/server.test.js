@@ -41,8 +41,9 @@ const codeOf = (r) => JSON.parse(bodyOf(r).slice(bodyOf(r).indexOf('\n\n') + 2))
 test('lists the expected tools', async () => {
   const c = await connect(fakeBackend().run);
   const names = (await c.listTools()).tools.map((t) => t.name).sort();
-  assert.deepStrictEqual(names, ['delete_sequence', 'list_campaigns', 'list_sent_threads', 'list_sequences', 'save_sequence',
-    'send_campaign', 'sign_in', 'sign_out', 'start_sequence_on_thread', 'status', 'stop_campaign']);
+  assert.deepStrictEqual(names, ['cancel_follow_up', 'delete_sequence', 'edit_follow_up', 'list_campaigns', 'list_sent_threads',
+    'list_sequences', 'pause_follow_ups', 'resume_follow_ups', 'save_sequence', 'send_campaign', 'sign_in', 'sign_out',
+    'start_sequence_on_thread', 'status', 'stop_campaign']);
 });
 
 test('send_campaign: preview first, confirm only with the matching code and same args', async () => {
@@ -80,10 +81,10 @@ test('stop_campaign needs a preview too', async () => {
   const bad = await c.callTool({ name: 'stop_campaign', arguments: { thread_id: 't1', confirm: true, confirmation_code: 'abc' } });
   assert.ok(bad.isError);
   const pv = await c.callTool({ name: 'stop_campaign', arguments: { thread_id: 't1' } });
-  assert.deepStrictEqual(be.calls[0], ['mcpStopCampaign', ['t1', false]]);
+  assert.deepStrictEqual(be.calls[0], ['mcpStopCampaign', [{ threadId: 't1', campaignName: '', recipient: '', all: false }, false]]);
   const ok = await c.callTool({ name: 'stop_campaign', arguments: { thread_id: 't1', confirm: true, confirmation_code: codeOf(pv) } });
   assert.ok(!ok.isError);
-  assert.deepStrictEqual(be.calls[1], ['mcpStopCampaign', ['t1', true]]);
+  assert.deepStrictEqual(be.calls[1], ['mcpStopCampaign', [{ threadId: 't1', campaignName: '', recipient: '', all: false }, true]]);
 });
 
 test('gate codes expire after 30 minutes', () => {
@@ -195,4 +196,20 @@ test('save_sequence takes default cc and reply_mode, refuses a per-follow-up to;
   assert.ok(bad.isError && /own to/.test(bodyOf(bad)));
   await c.callTool({ name: 'send_campaign', arguments: { recipients: 'x@y.co', subject: 's', body: 'b', cc: ['a@b.co', 'c@d.co'] } });
   assert.strictEqual(calls.at(-1)[1].cc, 'a@b.co, c@d.co');
+});
+
+test('manage tools: one selector, preview gate, args reach Apps Script', async () => {
+  const calls = [];
+  const c = await connect(async (fn, params = []) => { calls.push([fn, params]); return { preview: true }; });
+  const two = await c.callTool({ name: 'stop_campaign', arguments: { thread_id: 't1', all: true } });
+  assert.ok(two.isError && /exactly one/.test(bodyOf(two)));
+  const pv = await c.callTool({ name: 'pause_follow_ups', arguments: { campaign_name: 'Q4', until: '2030-01-02 09:00' } });
+  assert.ok(!pv.isError, bodyOf(pv));
+  assert.deepStrictEqual(calls[0], ['mcpPause', [{ threadId: '', campaignName: 'Q4', recipient: '', all: false }, true, Date.parse('2030-01-02T09:00:00Z'), false]]);
+  const blind = await c.callTool({ name: 'cancel_follow_up', arguments: { thread_id: 't1', step: 2, confirm: true, confirmation_code: 'x' } });
+  assert.ok(blind.isError);
+  const ep = await c.callTool({ name: 'edit_follow_up', arguments: { thread_id: 't1', step: 1, message: 'm' } });
+  const ok = await c.callTool({ name: 'edit_follow_up', arguments: { thread_id: 't1', step: 1, message: 'm', confirm: true, confirmation_code: codeOf(ep) } });
+  assert.ok(!ok.isError, bodyOf(ok));
+  assert.strictEqual(calls.at(-1)[0], 'mcpEditFollowUp'); assert.strictEqual(calls.at(-1)[1][1], true);
 });
