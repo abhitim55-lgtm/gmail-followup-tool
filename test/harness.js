@@ -988,4 +988,30 @@ test('any reply stops: cancelled on the next run, even before anything is due', 
   assert.ok(E2.userProps.custom_tj, 'kept');
 });
 
+test('scheduler works even if the FU/Custom label was deleted, and puts it back', () => {
+  const E = makeEnv();
+  E.ctx.studioSendCampaign({ recipients: 'a@b.co', subject: 'S', body: 'b', followUps: [{ amount: 1, unit: 'minutes', message: 'bump' }] });
+  E.threads.t1.labels.delete('FU/Custom');
+  const realGet = E.ctx.GmailApp.getUserLabelByName;
+  let deleted = true;
+  E.ctx.GmailApp.getUserLabelByName = (n) => (deleted && n === 'FU/Custom') ? null : realGet(n);
+  const realCreate = E.ctx.GmailApp.createLabel;
+  E.ctx.GmailApp.createLabel = (n) => { deleted = false; return realCreate(n); };
+  const d = JSON.parse(E.userProps.custom_t1); d.steps[0].sendAt = Date.now() - 1000; E.userProps.custom_t1 = JSON.stringify(d);
+  E.ctx.processFollowUps();
+  assert.strictEqual(E.sent.length, 2, 'follow-up sent without the label');
+  assert.ok(!deleted, 'label recreated');
+});
+
+test('scheduler clears schedules whose thread is gone, and stray labels', () => {
+  const E = makeEnv();
+  E.userProps.custom_ghost = JSON.stringify({ steps: [{ sendAt: Date.now() - 1000, message: 'x' }] });
+  const t = E.mkThread('stray', 'Stray', [E.mkMessage({ from: ME, to: 'x@y.co' })]);
+  t.labels.add('FU/Custom');
+  E.ctx.getOrCreateLabel_('FU/Custom');
+  E.ctx.processFollowUps();
+  assert.ok(!E.userProps.custom_ghost, 'ghost schedule cleared');
+  assert.ok(!t.labels.has('FU/Custom'), 'stray label removed');
+});
+
 console.log('\n' + pass + ' passed');

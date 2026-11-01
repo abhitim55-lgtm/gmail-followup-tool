@@ -225,15 +225,33 @@ function processFollowUps() {
   const gate = autopilotGate_();
 
   // Custom multi-step schedules (set via the sidebar UI).
-  const customLabel = GmailApp.getUserLabelByName(CONFIG.labelPrefix + '/Custom');
-  if (!customLabel) {
-    Logger.log('Custom: FU/Custom label DOES NOT EXIST in this account. Run setup() in the same account where you use the sidebar.');
-  } else {
-    const customThreads = customLabel.getThreads();
-    Logger.log('Custom: FU/Custom label exists, ' + customThreads.length + ' thread(s) tagged.');
+  // The saved schedules (custom_<threadId>) decide what runs. The FU/Custom
+  // label is only a view in Gmail: it used to be the source of truth, so when
+  // it was deleted nothing sent at all and nobody could tell. Now a missing
+  // label is recreated and put back on every scheduled thread.
+  {
     const props = PropertiesService.getUserProperties();
     const allKeys = props.getKeys().filter(function (k) { return k.indexOf('custom_') === 0; });
     Logger.log('Custom: ' + allKeys.length + ' schedule(s) stored in user properties.');
+    let customLabel = GmailApp.getUserLabelByName(CONFIG.labelPrefix + '/Custom');
+    if (!customLabel && allKeys.length) {
+      customLabel = getOrCreateLabel_(CONFIG.labelPrefix + '/Custom');
+      Logger.log('Custom: FU/Custom label was missing — recreated it.');
+    }
+    if (customLabel) {
+      customLabel.getThreads().forEach(function (t) {
+        if (!props.getProperty('custom_' + t.getId())) t.removeLabel(customLabel);
+      });
+    }
+    const customThreads = [];
+    allKeys.forEach(function (k) {
+      let t = null;
+      try { t = GmailApp.getThreadById(k.slice('custom_'.length)); }
+      catch (e) { Logger.log('Custom: could not open ' + k + ' this run: ' + e); return; }
+      if (!t) { Logger.log('Custom: thread for ' + k + ' no longer exists — clearing.'); props.deleteProperty(k); return; }
+      if (customLabel && !hasLabel_(t, customLabel.getName())) t.addLabel(customLabel);
+      customThreads.push(t);
+    });
     for (const thread of customThreads) {
       if (sent >= CONFIG.maxPerRun) break;
       const key = 'custom_' + thread.getId();
