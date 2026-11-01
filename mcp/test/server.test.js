@@ -87,12 +87,22 @@ test('stop_campaign needs a preview too', async () => {
   assert.deepStrictEqual(be.calls[1], ['mcpStopCampaign', [{ threadId: 't1', campaignName: '', recipient: '', all: false }, true]]);
 });
 
-test('gate codes expire after 30 minutes', () => {
+test('gate codes expire after 30 minutes', async () => {
   let t = 0;
   const g = createGate(() => t);
-  const code = g.issue('send', { a: 1 });
+  const code = await g.issue('send', { a: 1 });
   t = 31 * 60 * 1000;
-  assert.match(g.check('send', { a: 1, confirmation_code: code }), /30 minutes/);
+  assert.match(await g.check('send', { a: 1, confirmation_code: code }), /30 minutes/);
+});
+
+test('gate works with an external store and codes are one-time', async () => {
+  const kv = new Map();
+  const store = { get: async (k) => kv.get(k), put: async (k, v) => { kv.set(k, v); }, delete: async (k) => { kv.delete(k); } };
+  const issuer = createGate(Date.now, store);
+  const code = await issuer.issue('send', { a: 1 });
+  const checker = createGate(Date.now, store); // a different request, same store
+  assert.strictEqual(await checker.check('send', { a: 1, confirmation_code: code }), '');
+  assert.match(await checker.check('send', { a: 1, confirmation_code: code }), /preview first/);
 });
 
 test('not signed in gives a setup message, not a crash', async () => {

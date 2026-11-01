@@ -1,0 +1,22 @@
+{
+  // Hosted Claude connector for the Gmail Follow-Up Tool (works on phone and web).
+  "name": "gmail-followups",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // tools.js lives one folder up; make it use this folder's copies.
+  "alias": {
+    "zod": "./node_modules/zod",
+    "@modelcontextprotocol/sdk": "./node_modules/@modelcontextprotocol/sdk"
+  },
+  "vars": {
+    // Only Google accounts on this domain can connect.
+    "ALLOWED_DOMAIN": "procmart.com"
+  },
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "12d7dc47e3da4ec4862e9d198558ebee" }],
+  "durable_objects": {
+    "bindings": [{ "name": "MCP_OBJECT", "class_name": "FollowUpsMCP" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["FollowUpsMCP"] }],
+  "observability": { "enabled": true }
+}
