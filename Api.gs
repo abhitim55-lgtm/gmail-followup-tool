@@ -190,8 +190,7 @@ function mcpThreadPreview_(p, plan, opts) {
     const from = parseAddress_(messages[i].getFrom());
     if (!from.email) continue;
     warnings.push((from.name || from.email) + ' wrote on ' + formatLocal_(messages[i].getDate().getTime(), tz) +
-      ', after your last email. Any reply stops follow-ups set to "if no reply", so those will be cancelled ' +
-      'on the next run. Reply on the thread first, then start follow-ups, or use "No matter what".');
+      ', after your last email. That earlier reply does not stop these follow-ups; only replies after you start them do.');
     break;
   }
 
@@ -231,7 +230,7 @@ function mcpThreadPreview_(p, plan, opts) {
     };
   });
 
-  const stops = 'A reply from anyone other than you after your last email (client, anyone else on the thread, or a colleague)';
+  const stops = 'A reply from anyone other than you after you start these follow-ups (client, anyone else on the thread, or a colleague)';
   return {
     preview: true,
     thread: { threadId: thread.threadId, subject: thread.subject, replySubject: /^Re:/i.test(thread.subject) ? thread.subject : 'Re: ' + thread.subject,

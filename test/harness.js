@@ -477,7 +477,7 @@ test('Studio campaign log: list shows status, report shows each person\'s stage,
   assert.strictEqual(row.name, 'Q4'); assert.strictEqual(row.status, 'active');
   assert.strictEqual(row.recipients, 2); assert.strictEqual(row.active, 2); assert.strictEqual(row.steps, 2);
   // Jane replies: the scheduler drops her follow-ups.
-  E.threads.t1.messages.push(E.mkMessage({ from: 'Jane <jane@acme.com>', to: ME }));
+  E.threads.t1.messages.push(E.mkMessage({ from: 'Jane <jane@acme.com>', to: ME, date: Date.now() + 1000 }));
   const d = JSON.parse(E.userProps.custom_t1); d.steps[0].sendAt = Date.now() - 1000; E.userProps.custom_t1 = JSON.stringify(d);
   E.ctx.processFollowUps();
   let rep = E.ctx.studioGetCampaign(row.id);
@@ -765,7 +765,7 @@ test('default mode skips colleagues: replies to the last external sender', () =>
   const pv = E.ctx.mcpStartSequenceOnThread({ threadId: 'tj', followUps: [{ amount: 1, unit: 'days', message: 'Hi {firstName}' }] });
   assert.strictEqual(pv.followUps[0].to, 'libu.kuriakose@jotun.ae');
   assert.ok(pv.followUps[0].message.startsWith('Hi Libu'));
-  assert.ok(pv.warnings.some(w => /Libu K wrote .* after your last email\. Any reply stops/.test(w)), pv.warnings.join('|'));
+  assert.ok(pv.warnings.some(w => /Libu K wrote .* after your last email\. That earlier reply does not stop/.test(w)), pv.warnings.join('|'));
 });
 
 test('default mode never follows up with only colleagues', () => {
@@ -939,7 +939,7 @@ test('any reply stops: colleague replies after scheduling', () => {
   assert.ok(!E.userProps.custom_tj);
 });
 
-test('any reply stops: the real Jotun case (client then colleague replied before the sequence was set up)', () => {
+test('replies before the sequence was started do not stop it (Jotun thread shape)', () => {
   const E = makeEnv();
   const day = 86400000, t0 = Date.now() - 5 * day;
   E.mkThread('tj2', 'Procmart X Jotun: Follow up on our connect', [
@@ -950,12 +950,16 @@ test('any reply stops: the real Jotun case (client then colleague replied before
   const p = { threadId: 'tj2', replyMode: 'custom', to: ['udeshini.edirisooriya@jotun.com'], stopOnReplyFrom: ['jotun.com'],
     followUps: [{ amount: 1, unit: 'minutes', message: 'bump' }] };
   const pv = E.ctx.mcpStartSequenceOnThread(p);
-  assert.ok(pv.warnings.some(w => /after your last email\. Any reply stops/.test(w)), pv.warnings.join('|'));
+  assert.ok(pv.warnings.some(w => /does not stop these follow-ups; only replies after you start/.test(w)), pv.warnings.join('|'));
   E.ctx.mcpStartSequenceOnThread({ ...p, confirm: true });
   due(E, 'tj2');
   E.ctx.processFollowUps();
-  assert.strictEqual(E.sent.length, 0, 'not sent: they already replied');
-  assert.ok(!E.userProps.custom_tj2, 'cancelled');
+  assert.strictEqual(E.sent.length, 1, 'sent: the replies were before it started');
+  // A reply after it started (from anyone, here a colleague) stops the rest.
+  E.ctx.mcpStartSequenceOnThread({ ...p, confirm: true });
+  E.threads.tj2.messages.push(E.mkMessage({ from: 'Kashif Ahmed <kashif.ahmed@procmart.com>', to: ME, date: Date.now() + 5000 }));
+  E.ctx.processFollowUps();
+  assert.ok(!E.userProps.custom_tj2, 'cancelled by the later reply');
 });
 
 test('any reply stops: "no matter what" still sends; my own messages never stop it', () => {

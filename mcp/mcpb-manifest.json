@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "gmail-followup",
   "display_name": "Gmail Follow-ups",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Use the Gmail Follow-Up Tool from Claude: write and send campaigns with follow-ups and attachments, create sequences, start follow-ups on sent emails, and stop them. Everything previews first and waits for your yes.",
   "author": {
     "name": "Abhishek Sehgal"

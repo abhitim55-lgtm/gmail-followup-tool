@@ -2596,24 +2596,22 @@ function evaluateStepCondition_(condition, hasReply) {
   }
 }
 
-// True if anyone but me has written on the thread after my last email: the
-// client, another party, or a colleague. A reply that came in before the
-// sequence was set up counts too (that's how the Jotun thread slipped through
-// when only new client replies counted). On a thread with nothing from me
-// yet, messages since the step was scheduled count.
+// True if anyone but me has written on the thread since this follow-up was
+// scheduled: the client, another party, or a colleague. Replies that came in
+// before the sequence was started don't count. Steps saved before createdAt
+// existed fall back to "after my last email".
 function stepHasReply_(messages, step, myEmails, myLastIdx) {
   step = step || {};
   const fromSomeoneElse = function (m) {
     return !!parseAddress_(m.getFrom()).email && !isFromMe_(m, myEmails);
   };
-  if (myLastIdx >= 0) {
-    for (let i = myLastIdx + 1; i < messages.length; i++) {
-      if (fromSomeoneElse(messages[i])) return true;
-    }
-    return false;
+  if (step.createdAt) {
+    return messages.some(function (m) { return m.getDate().getTime() > step.createdAt && fromSomeoneElse(m); });
   }
-  const sinceMs = step.createdAt || 0;
-  return messages.some(function (m) { return m.getDate().getTime() > sinceMs && fromSomeoneElse(m); });
+  for (let i = myLastIdx + 1; i < messages.length; i++) {
+    if (fromSomeoneElse(messages[i])) return true;
+  }
+  return false;
 }
 
 
