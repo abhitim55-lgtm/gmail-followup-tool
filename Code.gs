@@ -261,6 +261,20 @@ function processFollowUps() {
             continue;
           }
         }
+        // Any reply cancels right away, not only when a follow-up comes due,
+        // so a thread someone answered stops showing as scheduled. Only when
+        // every remaining step is "if no reply"; others decide when they fire.
+        if (data.steps.every(function (st) { return (st.condition || 'no_reply') === 'no_reply'; })) {
+          const msgs = threadMessages_(thread);
+          let mine = -1;
+          for (let i = msgs.length - 1; i >= 0; i--) { if (isFromMe_(msgs[i], myEmails)) { mine = i; break; } }
+          if (stepHasReply_(msgs, data.steps[0], myEmails, mine)) {
+            Logger.log('Custom: someone replied — cancelling ' + data.steps.length + ' follow-up(s).');
+            props.deleteProperty(key);
+            thread.removeLabel(customLabel);
+            continue;
+          }
+        }
         const firstStepIn = data.steps[0].sendAt - Date.now();
         Logger.log('Custom: ' + data.steps.length + ' step(s), first fires in ' + Math.round(firstStepIn / 1000) + 's.');
         if (firstStepIn > 0) continue;
@@ -2564,37 +2578,24 @@ function evaluateStepCondition_(condition, hasReply) {
   }
 }
 
-// True if a reply has arrived that should count against this step. Mail from
-// me or a colleague on my own domain never counts.
-//   stopOnReplyFrom set: a message from one of those domains/addresses.
-//   Explicit To (custom mode): a message from anyone on the step's To/Cc.
-//   Reply-all: a message from anyone outside my domain.
-// Those three count messages since the step was scheduled. Thread mode (the
-// default): any message after my last outbound.
+// True if anyone but me has written on the thread after my last email: the
+// client, another party, or a colleague. A reply that came in before the
+// sequence was set up counts too (that's how the Jotun thread slipped through
+// when only new client replies counted). On a thread with nothing from me
+// yet, messages since the step was scheduled count.
 function stepHasReply_(messages, step, myEmails, myLastIdx) {
   step = step || {};
-  const stopList = Array.isArray(step.stopOnReplyFrom) ? step.stopOnReplyFrom : [];
-  const targets = (step.to && step.replyMode !== 'reply_all')
-    ? parseAddressList_(mergeRecipients_(step.to, step.cc || '')).map(function (a) { return a.email.toLowerCase(); })
-    : null;
-  function counts(m) {
-    const from = parseAddress_(m.getFrom()).email.toLowerCase();
-    if (!from || isFromMe_(m, myEmails)) return false;
-    // stopOnAnyReply: a colleague's reply stops it too.
-    if (isOwnDomain_(from, myEmails)) return !!step.stopOnAnyReply;
-    if (stopList.length) return matchesStopList_(from, stopList);
-    if (targets) return targets.indexOf(from) !== -1;
-    return true;
+  const fromSomeoneElse = function (m) {
+    return !!parseAddress_(m.getFrom()).email && !isFromMe_(m, myEmails);
+  };
+  if (myLastIdx >= 0) {
+    for (let i = myLastIdx + 1; i < messages.length; i++) {
+      if (fromSomeoneElse(messages[i])) return true;
+    }
+    return false;
   }
-  if (step.to || stopList.length || step.replyMode === 'reply_all') {
-    const sinceMs = step.createdAt || 0;
-    return messages.some(function (m) { return m.getDate().getTime() > sinceMs && counts(m); });
-  }
-  if (myLastIdx === -1) return false;
-  for (let i = myLastIdx + 1; i < messages.length; i++) {
-    if (counts(messages[i])) return true;
-  }
-  return false;
+  const sinceMs = step.createdAt || 0;
+  return messages.some(function (m) { return m.getDate().getTime() > sinceMs && fromSomeoneElse(m); });
 }
 
 

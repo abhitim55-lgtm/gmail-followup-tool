@@ -188,12 +188,10 @@ function mcpThreadPreview_(p, plan, opts) {
   for (let i = messages.length - 1; i >= 0; i--) { if (isFromMe_(messages[i], myEmails)) { myLastIdx = i; break; } }
   for (let i = messages.length - 1; i > myLastIdx; i--) {
     const from = parseAddress_(messages[i].getFrom());
-    if (isOwnDomain_(from.email, myEmails)) continue;
+    if (!from.email) continue;
     warnings.push((from.name || from.email) + ' wrote on ' + formatLocal_(messages[i].getDate().getTime(), tz) +
-      ', after your last email, and nobody has answered yet. ' +
-      (plan.mode === 'last_sender' && !plan.stopOnReplyFrom.length
-        ? 'Follow-ups set to "if no reply" will not send.'
-        : 'That earlier reply does not stop these follow-ups; only new replies do.'));
+      ', after your last email. Any reply stops follow-ups set to "if no reply", so those will be cancelled ' +
+      'on the next run. Reply on the thread first, then start follow-ups, or use "No matter what".');
     break;
   }
 
@@ -233,17 +231,13 @@ function mcpThreadPreview_(p, plan, opts) {
     };
   });
 
-  const stops = plan.stopOnReplyFrom.length
-    ? 'A new reply from ' + plan.stopOnReplyFrom.join(', ')
-    : plan.mode === 'custom' ? 'A new reply from anyone in To or Cc outside your company'
-      : 'A reply from anyone outside your company';
+  const stops = 'A reply from anyone other than you after your last email (client, anyone else on the thread, or a colleague)';
   return {
     preview: true,
     thread: { threadId: thread.threadId, subject: thread.subject, replySubject: /^Re:/i.test(thread.subject) ? thread.subject : 'Re: ' + thread.subject,
               permalink: thread.permalink },
     replyMode: plan.mode,
-    stopsWhen: stops + (plan.stopOnAnyReply ? ' (a colleague\'s reply also stops it)' : ' (colleagues on ' + (domains.join(', ') || 'your account') + ' never stop it)') +
-      ' stops the follow-ups marked "if no reply".',
+    stopsWhen: stops + ' stops the follow-ups marked "if no reply".',
     timezone: tz,
     followUps: rows,
     warnings: warnings
