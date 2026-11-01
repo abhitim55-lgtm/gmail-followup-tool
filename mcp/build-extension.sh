@@ -9,7 +9,7 @@ OUT=dist
 STAGE="$OUT/stage"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
-cp server.js appsScript.js auth.js config.json package.json package-lock.json "$STAGE/"
+cp server.js tools.js appsScript.js auth.js config.json package.json package-lock.json "$STAGE/"
 cp mcpb-manifest.json "$STAGE/manifest.json"
 (cd "$STAGE" && npm ci --omit=dev --silent)
 npx -y @anthropic-ai/mcpb@latest pack "$STAGE" "$OUT/gmail-followup.mcpb"
